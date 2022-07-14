@@ -1,0 +1,368 @@
+---
+title: "brain_cellType_VCF"
+author: "MyunghoChild, launching"
+date: '2022 6 23 '
+output: html_document
+---
+## VCF data format conversion
+```{r}
+require(MutationalPatterns)
+require(dplyr)
+hg38="BSgenome.Hsapiens.UCSC.hg38"
+require(hg38, character.only=TRUE)
+
+workdir="/home/jsh/01.Project/Celltype/20220622/08.mt2_PU1/"
+germlineResource="Blood"
+germlineMutSigRefVCF="Blood.htc_pass.sample1per.vcf"
+
+if (!endsWith(workdir,"/")){
+  workdir=paste0(workdir, "/")
+}
+
+
+vcf_files = list.files(paste0(workdir),
+                       pattern = c(".vcf"),full.names = TRUE) %>% 
+  strsplit(., "/") %>% lapply(., function(X) X[length(X)]) %>% unlist(.) %>%  .[grep("mt2_pass", .)] %>% .[grep(".vcf$", . )]
+
+samples= vcf_files %>% strsplit(., "\\.") %>% lapply(., function(X) X[1]) %>% unlist(.)
+
+vcfs=read_vcfs_as_granges(paste0(workdir, vcf_files), samples, hg38)
+
+vcfs_list = list()
+
+for (tissue in samples){
+  vcf_df = vcfs[[tissue]] %>% as.data.frame(.) %>% dplyr::select(c(seqnames, start, end, REF))
+  vcf_df$REF=vcf_df$REF %>% as.factor(.)
+  vcf_df$ALT=vcfs[[tissue]]$ALT@unlistData %>% as.factor(.)
+  vcfs_list[[tissue]] = vcf_df
+}
+```
+
+
+## Venn Diagram / UpSet plot (raw VCFs for cell types)
+```{r}
+require(ggvenn)
+require(ComplexHeatmap)
+
+vcfs_venn_list = vcfs_list %>% lapply(., function(x) rownames(x))
+
+ggvenn(
+  vcfs_venn_list, 
+  stroke_size = 0.5, set_name_size = 5
+  )
+
+m = make_comb_mat(vcfs_venn_list)
+
+ss = set_size(m)
+cs = comb_size(m)
+ht = UpSet(m, 
+    set_order = order(ss),
+    comb_order = order(comb_degree(m), -cs),
+    top_annotation = HeatmapAnnotation(
+        "sSNV intersection counts" = anno_barplot(cs, 
+            ylim = c(0, max(cs)*1.1),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            height = unit(4, "cm")
+        ), 
+        annotation_name_side = "left", 
+        annotation_name_rot = 90),
+    left_annotation = rowAnnotation(
+        "sSNVs per cell type" = anno_barplot(-ss, 
+            baseline = 0,
+            axis_param = list(
+                at = c(0, -500, -1000, -1500),
+                labels = c(0, 500, 1000, 1500),
+                labels_rot = 0),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            width = unit(4, "cm")
+        ),
+        set_name = anno_text(set_name(m), 
+            location = 0.5, 
+            just = "center",
+            width = max_text_width(set_name(m)) + unit(4, "mm"))
+    ), 
+    right_annotation = NULL,
+    show_row_names = FALSE)
+ht = draw(ht)
+od = column_order(ht)
+decorate_annotation("sSNV intersection counts", {
+    grid.text(cs[od], x = seq_along(cs), y = unit(cs[od], "native") + unit(2, "pt"), 
+        default.units = "native", just = c("left", "bottom"), 
+        gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
+})
+```
+
+
+
+### PHYLIP generation
+```{r} 
+cellType_list = vcfs_list
+for (tissue in names(cellType_list)){
+  x=cellType_list[[tissue]]
+  x$identifier = paste(x$seqnames, x$start, x$end, x$REF, x$ALT, sep="_")
+  rownames(x)=x$identifier
+  cellType_list[[tissue]]=x
+}
+
+pooled = cellType_list %>% lapply(., function(x) x$identifier) %>% unlist(.) %>% unique(.) %>% as.data.frame(.) %>% setNames("identifier")
+
+pooled$chr= pooled$identifier %>% strsplit(., "_") %>% lapply(., function(x) x[1]) %>% unlist(.)
+
+pooled$start= pooled$identifier %>% strsplit(., "_") %>% lapply(., function(x) x[2]) %>% unlist(.)
+
+pooled$end= pooled$identifier %>% strsplit(., "_") %>% lapply(., function(x) x[3]) %>% unlist(.)
+
+pooled$REF= pooled$identifier %>% strsplit(., "_") %>% lapply(., function(x) x[4]) %>% unlist(.)
+
+pooled$ALT= pooled$identifier %>% strsplit(., "_") %>% lapply(., function(x) x[5]) %>% unlist(.)
+
+for (tissue in names(cellType_list)){
+  pooled[[tissue]]=ifelse(startsWith(cellType_list[[tissue]][pooled$identifier,] %>% rownames(.),"NA"),0,1)
+}
+
+pooled[[paste0(germlineResource, "_seq")]] = pooled[["REF"]]
+
+for (tissue in names(cellType_list)){
+  pooled[[paste0(tissue, "_seq")]] = ifelse(pooled[[tissue]], 
+                                            pooled[["ALT"]], 
+                                            pooled[["REF"]])
+}
+
+
+pooled$chr = pooled$chr %>% factor(., levels=c(paste0("chr",1:22),"chrX", "chrY"))
+
+pooled$start = pooled$start %>% as.numeric(.)
+pooled$end = pooled$end %>% as.numeric(.)
+
+pooled = pooled %>% arrange(start) %>% arrange(chr)
+
+dnaSeqOnly = pooled[, colnames(pooled) %>% grepl("_seq$", .)] %>% t(.)
+rownames(dnaSeqOnly) = c(germlineResource, names(cellType_list))
+seqs=c()
+for (tissue in rownames(dnaSeqOnly)){
+  seqs = c(seqs, dnaSeqOnly[tissue,] %>% paste0(., collapse = ""))
+}
+
+phylip=cbind(rownames(dnaSeqOnly), seqs)
+colnames(phylip) = dnaSeqOnly %>% dim(.) %>% as.character(.)
+
+write.table(phylip, 
+            file=paste0(workdir,"cellTypes_dna.phylip"), 
+            quote=FALSE, sep="\t", col.names=T, row.names=F)
+
+cellType_list_toWrite=matrix(nrow=length(cellType_list), ncol=2)
+
+for (itr in 1:length(cellType_list)){
+  ct=names(cellType_list)[[itr]]
+  id=cellType_list[[ct]][["identifier"]] %>% paste0(., collapse=",")
+  cellType_list_toWrite[itr,1]=ct
+  cellType_list_toWrite[itr,2]=id
+}
+
+write.table(cellType_list_toWrite, 
+            file=paste0(workdir, "cellTypes_mutations.txt"),
+            quote=FALSE, sep="\t", col.names=F, row.names=F)
+
+system(paste("python3",
+              "/home/jsh/02.Tools/cellTypeGenome_codes/mutEvolBranch.py",
+              workdir, sep = " "))
+```
+
+
+### Evolution of shared mutations onto the MP tree
+```{r}
+
+require(treeio); require(ggtree)
+
+length_tree_text = readLines(paste0(workdir,
+                                "raxml/RAxML_nodeLabelledRootedTree.anc.nhx"))
+length_tree=read.nhx(textConnection(length_tree_text))
+
+branchMutsMat=read.table(paste0(workdir,"branch_mutations.txt"))
+
+branchMuts=list()
+for (ct in rownames(branchMutsMat)){
+  branchMuts[[ct]]=branchMutsMat[ct,] %>% strsplit(",") %>% unlist(.)
+}
+
+
+treeP=ggtree(length_tree)+
+    scale_color_manual(values=c("black", "firebrick", "steelblue"))+
+  geom_text2(aes(label=mut), vjust=-1, hjust=2) + 
+  geom_nodelab(vjust=+2, hjust=1.5) +
+  geom_tiplab(align=TRUE, linetype='dashed', linesize=.3)+
+  theme_tree2()
+treeP
+```
+
+
+
+### Mutational signature analyses (VCF prep)
+```{r}
+branch_files = list.files(paste0(workdir),
+                       pattern = c(".vcf"),full.names = TRUE) %>% 
+  strsplit(., "/") %>% lapply(., function(X) X[length(X)]) %>% 
+  unlist(.) %>%  .[grep("branchMuts", .)] %>% .[grep(".vcf$", . )]
+branch_files = c(branch_files, germlineMutSigRefVCF)
+
+brSamples= branch_files %>% strsplit(., "\\.") %>% lapply(., function(X) X[1]) %>% unlist(.)
+
+brMuts_vcfs=read_vcfs_as_granges(paste0(workdir, branch_files),
+                                 brSamples, hg38)
+```
+
+### Mutational catalogs for each cell type
+```{r}
+
+require(gridExtra)
+
+type_occur=mut_type_occurrences(brMuts_vcfs, hg38)
+sixplot=plot_spectrum(type_occur, CT=TRUE)
+
+six_tissue=plot_spectrum(type_occur, by=tissue, CT=TRUE)
+
+mut_mat=mut_matrix(vcf_list=brMuts_vcfs, ref_genome=hg38)
+
+colnames(mut_mat)=gsub(paste(workdir,from,"/",sep=""),"",colnames(mut_mat))
+
+ninetysix=plot_96_profile(mut_mat, condensed=TRUE)
+
+ninetysix
+
+```
+
+
+### Mutational signatures re-fitting on COSMIC SBS Sig
+```{r}
+
+topContSigNum = 6
+
+#### COSMIC v2 legacy signatures (TCGA)
+sp_url=paste("https://cancer.sanger.ac.uk/cancergenome/assets/",        
+             "signatures_probabilities.txt", sep="") 
+
+#### COSMIC v3 SBS signatures (PCAWG)
+#sp_url=paste("https://cog.sanger.ac.uk/cosmic-signatures-production/documents/COSMIC_v3.3_SBS_GRCh38.txt",sep="")
+
+
+rawSig=read.table(sp_url, sep="\t", header=TRUE)
+
+colnames(rawSig) = colnames(rawSig) %>% 
+  gsub("Signature.", "SBS",.) %>% 
+  gsub("Somatic.Mutation.Type", "Type", .)
+
+new_order=match(row.names(mut_mat), rawSig$Type)
+
+orderedSig=rawSig[as.vector(new_order),] # reorder to mine
+
+row.names(orderedSig)=orderedSig$Type
+
+
+cancerSig=as.matrix(orderedSig[,orderedSig %>% colnames(.) %>% grepl("^SBS", .)])
+
+cosine_ours_cosmic=cos_sim_matrix(mut_mat, cancerSig)
+cosmic_cosine_plot=plot_cosine_heatmap(cosine_ours_cosmic, 
+                                       cluster_rows=TRUE)
+
+fit_res=fit_to_signatures(mut_mat, cancerSig)
+selectSigNames=rowSums(fit_res$contribution) %>% .[rev(order(.))] %>% .[1:topContSigNum] %>% names(.) %>% strsplit(., "SBS") %>% lapply(., function(X) X[2]) %>% unlist(.) %>% as.numeric(.) %>% .[order(.)] %>% paste0("SBS", .)
+
+selectSigs=which(colnames(cancerSig) %in% selectSigNames)
+names(selectSigs)=selectSigNames
+
+
+abs_cosmic_cont_plot=plot_contribution(fit_res$contribution[selectSigs,],
+                                           cancerSig[,selectSigs],
+                                           coord_flip = TRUE,
+                                           mode="absolute")
+
+rel_cosmic_cont_plot=plot_contribution(fit_res$contribution[selectSigs,],
+                                           cancerSig[,selectSigs], 
+                                           coord_flip = TRUE,
+                                           mode="relative")
+
+sigplotRefit=plot_96_profile(cancerSig[,selectSigs], condensed=T, ymax=0.1)
+
+refitCont = rowSums(fit_res$contribution) %>% .[rev(order(.))] %>% as.data.frame(.) %>% setNames("contribution") %>% tibble::rownames_to_column("signatures")
+
+refitCont$signatures = factor(refitCont$signatures, 
+                              levels = rev(refitCont$signatures))
+
+refitContributionPlot = refitCont %>% ggplot(., 
+                     aes(x=signatures, y=contribution, 
+                         fill=signatures))+
+  geom_bar(stat="identity")+coord_flip()+theme_classic()
+
+
+refitCont
+cosmic_cosine_plot
+rel_cosmic_cont_plot
+sigplotRefit
+
+```
+
+### Mutational signatures de novo decomposition of cell types
+```{r}
+require(NMF)
+
+rankN=3
+
+mut_mat_adj=mut_mat+0.0001 #add pseudocount
+
+#estimate=nmf(mut_mat, rank=2:5, method="brunet", nrun=15, seed=100072)
+
+nmf_res=extract_signatures(mut_mat_adj, rank=rankN, nrun=10)
+
+signames=paste0("Sig ", letters %>% toupper(.) %>% .[1:rankN])
+colnames(nmf_res$signatures)=signames
+rownames(nmf_res$contribution)=signames
+```
+
+### Signature contribution plots
+```{r}
+sigplot=plot_96_profile(nmf_res$signatures, condensed=T, ymax=0.1)
+
+pcont=plot_contribution(nmf_res$contribution, nmf_res$signatures, mode="relative", coord_flip = TRUE)
+
+contheat=plot_contribution_heatmap(nmf_res$contribution, plot_values = T)
+
+mergedSig=cbind(cancerSig, nmf_res$signatures)
+
+hclust=cluster_signatures(mergedSig, method="average")
+
+plot(hclust)
+sigplot
+pcont
+contheat
+cosmic_cosine_plot
+rel_cosmic_cont_plot
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

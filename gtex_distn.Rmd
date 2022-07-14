@@ -1,0 +1,48 @@
+
+### Test 
+```{r}
+require(tibble); require(dplyr); require(ggplot2)
+#gtex=read.table("GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_median_tpm.gct", sep="\t", header=T)
+gtexTrim=gtex %>% select(-c("Description")) %>% column_to_rownames("Name")
+colnames(gtexTrim) = colnames(gtexTrim) %>% gsub("\\.", "", .)
+
+medians=c()
+means=c()
+for (c in colnames(gtexTrim)){
+  log2TPM=gtexTrim[[c]] %>% .[.>0] %>% log2(.)
+  medians=c(medians,median(log2TPM))
+  means=c(means,mean(log2TPM))
+}
+names(medians)=colnames(gtexTrim)
+names(means)=colnames(gtexTrim)
+
+
+#gtexAllNonZero=gtexTrim %>% as.matrix(.) %>% as.vector(.) %>% .[.>0]
+#gtexAllNonZeroLevel=case_when(gtexAllNonZero<=0.2 ~ "Undetectable",gtexAllNonZero<=2 ~ "VeryLow",gtexAllNonZero<=20 ~ "Low",
+#                             gtexAllNonZero<=100 ~ "High",TRUE ~ "VeryHigh")
+
+#gtexAllNonZeroLog10=gtexAllNonZero %>% log10(.)
+#gtexAllDF=bind_cols(gtexAllNonZeroLog10, gtexAllNonZeroLevel) %>% setNames(c("log10TPM","level"))
+#gtexAllDF %>% ggplot(., aes(x=log10TPM))+geom_histogram(aes(fill=level), bins=200)+theme_bw()+ggtitle("Non-zero log10(TPM) Distn of all GTEx v8 tissues ")
+
+for (tissue in colnames(gtexTrim)){
+  tissueGtexNonZero=gtexTrim[[tissue]] %>% .[.>0]
+  tissueGtexNonZeroLevel=case_when(tissueGtexNonZero<=0.2 ~ "Undetectable",tissueGtexNonZero<=2 ~ "VeryLow",tissueGtexNonZero<=20 ~ "Low",  tissueGtexNonZero<=100 ~ "High",TRUE ~ "VeryHigh")
+  tissueGtexNonZeroLog10=tissueGtexNonZero %>% log10(.)
+  gtexDF=bind_cols(tissueGtexNonZeroLog10, tissueGtexNonZeroLevel) %>% setNames(c("log10TPM","level"))
+  plot=gtexDF %>% ggplot(., aes(x=log10TPM))+geom_histogram(aes(fill=level), bins=200)+theme_bw()+ggtitle(tissue)
+  print(plot)
+}
+
+#gtexGaussKern=density(gtexAllNonZeroLog10, kernel="gaussian")
+#firstMax=gtexGaussKern$x[which.max(gtexGaussKern$y)]
+
+
+
+#secondMax=gtexGaussKern$x[which(gtexGaussKern$y==max(gtexGaussKern$y[gtexGaussKern$x < 0]))]
+#min=gtexGaussKern$x[which(gtexGaussKern$y==min(gtexGaussKern$y[abs(gtexGaussKern$x) < 1]))]
+
+#c(10^secondMax, 10^min, 10^firstMax)
+#gtexTrim[[tissue]] %>% .[.>1] %>% as.data.frame() %>% setNames("freq") %>% ggplot(., aes(x=freq))+geom_histogram(bins=1000)
+
+```

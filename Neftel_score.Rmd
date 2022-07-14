@@ -1,0 +1,197 @@
+---
+title: "Neftel_score"
+author: "Cha"
+date: '2021 2 17 '
+output: html_document
+---
+### Module scoring
+```{r}
+library(Seurat)
+library(dplyr)
+library(cowplot)
+library(ggplot2)
+library(stringr)
+
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/neftel/")
+ac.genes = read.table("hom2mus.ac_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+mes1.genes = read.table("hom2mus.mes1_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+mes2.genes = read.table("hom2mus.mes2_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+npc1.genes = read.table("hom2mus.npc1_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+npc2.genes = read.table("hom2mus.npc2_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+opc.genes = read.table("hom2mus.opc_genes.txt", sep="\t", header=T)$mouse %>% .[!is.na(.)]
+
+ac.genes = list(ac.genes)
+opc.genes = list(opc.genes)
+
+mes1.genes = list(mes1.genes)
+mes2.genes = list(mes2.genes)
+npc1.genes = list(npc1.genes)
+npc2.genes = list(npc2.genes)
+
+
+mes.genes = list(c(mes1.genes[[1]], mes2.genes[[1]]) %>% unique(.))
+npc.genes = list(c(npc1.genes[[1]], npc2.genes[[1]]) %>% unique(.))
+####################################################
+
+#load("/home/dcha/glioblastoma/rdata/obj_final.RData")
+b = obj2_monocle3
+#subset_score <- AddModuleScore(object = merge_subset, features = c(ac.genes, mes.genes, opc.genes, npc.genes), ctrl = 5, name = "GBM_score", seed = 1)
+
+score = AddModuleScore(object = b, features = ac.genes, ctrl = 100, name = "NEFTEL_AC", seed = 0)
+score = AddModuleScore(object = score, features = opc.genes, ctrl = 100, name = "NEFTEL_OPC", seed = 0)
+score = AddModuleScore(object = score, features = mes.genes, ctrl = 100, name ="NEFTEL_MES", seed = 0)
+score = AddModuleScore(object = score, features = npc.genes, ctrl = 100, name = "NEFTEL_NPC", seed = 0)
+
+names(x=score[[]])
+```
+
+
+### Df prep
+```{r}
+require(ggplot2); require(plotly)
+require(dplyr); require(tibble)
+require(Seurat)
+
+time=score@meta.data$batch %>% strsplit("_") %>% lapply(., `[`, 1) %>% as.character() %>% as.data.frame()
+batch=score@meta.data$batch %>% strsplit("_") %>% lapply(., `[`, 2) %>% as.character() %>% as.data.frame()
+cellType=score@meta.data$celltype %>% as.data.frame()
+
+SCopc=score@meta.data$NEFTEL_OPC1 %>% as.data.frame()
+SCnpc=score@meta.data$NEFTEL_NPC1 %>% as.data.frame()
+SCac=score@meta.data$NEFTEL_AC1 %>% as.data.frame()
+SCmes=score@meta.data$NEFTEL_MES1 %>% as.data.frame()
+
+tempDf=bind_cols(time, batch, cellType, SCopc, SCnpc, SCac, SCmes) %>% setNames(c("time","rep", "cellType", "SCopc", "SCnpc", "SCac", "SCmes"))
+
+tempDf = tempDf %>% mutate(D=(pmax(SCopc, SCnpc)-pmax(SCac, SCmes)))
+
+#OPC/NPC-enriched
+opcNpcDf = tempDf %>% filter(D>0) %>% mutate(X=(sign(SCnpc-SCopc)*log2(abs(SCnpc-SCopc)+1)))
+
+#AC/MES-enriched
+acMesDf = tempDf %>% filter(D<0) %>% mutate(X=(sign(SCmes-SCac)*log2(abs(SCmes-SCac)+1)))
+
+neftelDf=bind_rows(opcNpcDf, acMesDf)
+```
+
+
+### Visualization - normal neural cells
+```{r}
+colnames(neftelDf)
+tac = subset(neftelDf, cellType == "TAC")
+nb = subset(neftelDf, cellType == "NB")
+
+opc = subset(neftelDf, cellType == "OPC")
+cop = subset(neftelDf, cellType == "COP")
+nsc = subset(neftelDf, cellType == "AC")
+pc = subset(neftelDf, cellType == "PC")
+
+#neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=tac, aes(X, D), color=c('#66d99c'), size=0.5) + geom_point(data=nb, aes(X, D), color=c('#00bc59'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=nb, aes(X, D), color=c('#00bc59'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=opc, aes(X, D), color=c('#00BADE'), size=0.5) + 
+  #geom_point(data=cop, aes(X, D), color=c('#2194db'), size=0.5)  +
+  coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score") + theme_bw()
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=nsc, aes(X, D), color=c('#edeb53'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=pc, aes(X, D), color=c('#D874FD'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+
+
+#neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=tac, aes(X, D), color=c('#66d99c'), size=0.5) + geom_point(data=nb, aes(X, D), color=c('#00bc59'), size=0.5) + geom_point(data=opc, aes(X, D), color=c('#00BADE'), size=0.5) + geom_point(data=cop, aes(X, D), color=c('#2194db'), size=0.5) + geom_point(data=nsc, aes(X, D), color=c('#edeb53'), size=0.5) + geom_point(data=pc, aes(X, D), color=c('#D874FD'), size=0.5)  + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+geom_point(data=nb, aes(X, D), color=c('#00bc59'), size=0.5) + geom_point(data=opc, aes(X, D), color=c('#00BADE'), size=0.5) + #geom_point(data=cop, aes(X, D), color=c('#2194db'), size=0.5) +
+geom_point(data=nsc, aes(X, D), color=c('#edeb53'), size=0.5) + geom_point(data=pc, aes(X, D), color=c('#D874FD'), size=0.5)  + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+
+
+#neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.8, size=1) + theme_bw() + facet_wrap(cellType ~ ., ncol=3) + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) ++
+```
+
+### Visualization - (pre)cancerous cells
+```{r}
+
+#my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+#             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+#             "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+#             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+
+#precc1 = subset(neftelDf, cellType == "pre-CC1")
+precc2 = subset(neftelDf, cellType == "pre-CC2")
+cc1 = subset(neftelDf, cellType == "CC2")
+#cc2 = subset(neftelDf, cellType == "CC1-A1")
+#cc3 = subset(neftelDf, cellType == "CC1-B1")
+#cc4 = subset(neftelDf, cellType == "CC1-B2")
+
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=cc1, aes(X, D), color=c('#cf9c63'), size=0.5) + geom_point(data=cc2, aes(X, D), color=c('#de7b37'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2') + geom_point(data=cc3, aes(X, D), color=c('#d1c630'), size=0.5) + geom_point(data=cc4, aes(X, D), color=c('#8FAA00'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=precc1, aes(X, D), color=c('#F8766D'), size=0.5) + geom_point(data=precc2, aes(X, D), color=c('#ad180e'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=cc1, aes(X, D), color=c('#cf9c63'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=cc2, aes(X, D), color=c('#de7b37'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=cc3, aes(X, D), color=c('#d1c630'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=cc4, aes(X, D), color=c('#8FAA00'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=precc1, aes(X, D), color=c('#F8766D'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=precc2, aes(X, D), color=c('#ad180e'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+```
+
+### Visualization - Time points
+```{r}
+
+#my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+#             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+#             "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+#             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+
+neuralTypes=c("Neuron", "NB", "TAC", "NSC", "OL", "OPC", "COP", "pre_CC1", "pre_CC2", "CC1", "CC2", "CC3", "CC4")
+t1 = neftelDf %>% filter(time=="Control") %>% filter(cellType %in% neuralTypes)
+t2 = neftelDf %>% filter(time=="Early Phase") %>% filter(cellType %in% neuralTypes)
+t3 = neftelDf %>% filter(time=="Intermediate Phase") %>% filter(cellType %in% neuralTypes)
+t4 = neftelDf %>% filter(time=="Late Phase") %>% filter(cellType %in% neuralTypes)
+t5 =neftelDf %>% filter(time=="Tumor") %>% filter(cellType %in% neuralTypes)
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=t1, aes(X, D), color=c('#FEEBE2'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=t2, aes(X, D), color=c('#FBB4B9'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=t3, aes(X, D), color=c('#F768A1'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=t4, aes(X, D), color=c('#C51B8A'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=t5, aes(X, D), color=c('#7A0177'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+```
+
+
+### Visualization - tumor batch
+```{r}
+#my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+#             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+#             "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+#             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+
+tumorR1 = neftelDf %>% filter(time=="Tumor") %>% filter(rep == "R1")
+tumorR2 = neftelDf %>% filter(time=="Tumor") %>% filter(rep == "R2")
+tumorR3 = neftelDf %>% filter(time=="Tumor") %>% filter(rep == "R3")
+
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=tumorR1, aes(X, D), color=c('#F768A1'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=tumorR2, aes(X, D), color=c('#F768A1'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+
+neftelDf %>% ggplot(., aes(x=X, y=D, colour=cellType)) + geom_point(alpha=0.3, size=0.5, color='#c4c4c2')+ geom_point(data=tumorR3, aes(X, D), color=c('#F768A1'), size=0.5) + theme_bw() + coord_fixed(xlim=c(-1.5,1.5), ylim=c(-1.5,1.5)) + geom_vline(xintercept = 0, linetype="dotted") +geom_hline(yintercept = 0, linetype="dotted") + labs(x = "Meta-module score", y = "Meta-module score")
+```
+

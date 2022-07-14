@@ -1,0 +1,418 @@
+---
+title: "PC_mapping"
+author: "DohyeonCha"
+date: '2021 2 16 '
+output: html_document
+---
+### Hierarchical clustering on CellType-TimePoint, using Pseudobulk-averaged PC on Euclidean distance, Ward.D2 linkage
+```{r}
+require(Seurat); require(ggplot2); require(dplyr)
+require(ComplexHeatmap); require(RColorBrewer)
+require(grid); require(cowplot)
+
+min_cellNum=10
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+opc_path <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#b3b3b3', "CC1"='#cf9c63', "CC2"= '#b3b3b3', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "AC"=  '#b3b3b3', "TAC"= '#b3b3b3', "NB"=  '#b3b3b3', "Neuron"= '#b3b3b3', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#b3b3b3', "EC"='#b3b3b3', "PC"= '#b3b3b3', "VSMC"='#b3b3b3', 
+             "MAC"='#b3b3b3', "MG"='#b3b3b3', "TAM1"= '#b3b3b3', "TAM2"= '#b3b3b3', "Meninges"='#b3b3b3')
+
+obj=obj.final
+
+pcEmbs=obj@reductions$pca@cell.embeddings %>% as.data.frame()
+pcEmbs$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+varGeneCounts=obj@assays$RNA@counts[obj@assays$RNA@var.features,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+varGeneCounts$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+varGeneCPM=cpm_obj@assays$RNA@data[obj@assays$RNA@var.features,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+varGeneCPM$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+pseudoBulkCellTypesTimePoint=pcEmbs$cellTypeTimePoint %>% table(.) %>% as.data.frame(.) %>% setNames(c("cellTypeTimePoint", "Freq")) %>% filter(Freq>=min_cellNum) %>% .$cellTypeTimePoint %>% as.character(.) %>% as.data.frame(.) %>% setNames("cellTypeTimePoint") %>% mutate(cellType=(cellTypeTimePoint %>% as.character(.) %>% strsplit(":") %>% lapply(., function(x) x[[1]]) %>% as.character(.))) %>% 
+mutate(timePoint=(cellTypeTimePoint %>% as.character(.) %>% strsplit(":") %>% lapply(., function(x) x[[2]]) %>% as.character(.)))
+
+pseudoBulkCellTypesTimePoint$cellType = pseudoBulkCellTypesTimePoint$cellType %>% factor(., level=obj$celltype %>% levels(.))
+pseudoBulkCellTypesTimePoint$timePoint = pseudoBulkCellTypesTimePoint$timePoint %>% factor(., level=obj$orig.ident %>% levels(.))
+
+col_timePoint=brewer.pal(pseudoBulkCellTypesTimePoint$timePoint %>% levels(.) %>% length(.), "RdPu")
+names(col_timePoint) = pseudoBulkCellTypesTimePoint$timePoint %>% levels(.)
+col_cellType=my_cols[pseudoBulkCellTypesTimePoint$cellType %>% levels(.)]
+col_cttp=list("CellType"=col_cellType, "TimePoint"=col_timePoint)
+
+pseudoBulkPCemb=pcEmbs %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+pseudoBulkCounts=varGeneCounts %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+pseudoBulkCPM=varGeneCPM %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+
+methodName="Pearson's R"
+dist_PC_MouseGBM = pseudoBulkPCemb %>% amap::Dist(., method="correlation") ### Pearson dissimilarity = 1 - PCC
+hclust_PC_MouseGBM = dist_PC_MouseGBM %>% hclust(., method = "complete")
+reorder_PC_MouseGBM = (1 - as.matrix(dist_PC_MouseGBM)) %>% .[hclust_PC_MouseGBM$order,hclust_PC_MouseGBM$order]  ### Reordered PCC
+hclust_PC_MouseGBM %>% plot(., hang=-1)
+
+reorder_pseudoBulkCellTypesTimePoint = pseudoBulkCellTypesTimePoint %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[hclust_PC_MouseGBM$order,]
+#pseudoBulkCounts  %>% amap::Dist(., method="correlation") %>% hclust(., method = "ward.D2") %>% plot(., hang=-1)
+#pseudoBulkCPM  %>% amap::Dist(., method="correlation") %>% hclust(., method = "ward.D2") %>% plot(., hang=-1)
+
+
+
+
+annotMouseGBM=HeatmapAnnotation(
+  CellType = reorder_pseudoBulkCellTypesTimePoint$cellType,
+  TimePoint = reorder_pseudoBulkCellTypesTimePoint$timePoint, 
+  col = col_cttp,
+  annotation_name_side ="left"
+)
+
+cheatmap_PC_MouseGBM=Heatmap(reorder_PC_MouseGBM, name = methodName, row_names_side = "left", 
+        top_annotation = annotMouseGBM, show_row_names = F, show_column_names = F, cluster_columns=F,cluster_rows=F)
+draw(cheatmap_PC_MouseGBM)
+hclust_PC_MouseGBM %>% plot(., hang=-1, label=FALSE, ann=FALSE, axes=FALSE)
+```
+
+
+### Prep
+```{r}
+require(ggplot2); require(dplyr); require(tibble)
+require(Seurat)
+
+set.seed(0)
+setwd("/home/dcha/glioblastoma/diffusionEmbeddings")
+#load("/home/dcha/glioblastoma/rdata/obj_final.RData")
+
+normalCells=c("NSC", "OPC", "COP")
+cancerCells=c("pre-CC1", "pre-CC2", "CC1", "CC2", "CC3", "CC4")
+
+neuralRoadmap <- subset(obj.final, idents= normalCells)
+neuralRoadmap <- subset(neuralRoadmap, downsample=400)
+
+#neural_precc <- subset(obj.final, idents= c("NSC", "TAC", "NB", "OPC", "COP", "pre-CC1", "pre-CC2"))
+#neural_precc <- subset(neural_precc, downsample=400)
+gbmRoadmap <- subset(obj.final, idents= c(normalCells, cancerCells))
+gbmRoadmap <- subset(gbmRoadmap, downsample=400)
+
+subPCA = function(subs, fn){
+  subcluster = subs
+  DefaultAssay(subcluster) = "RNA"
+  subcluster = FindVariableFeatures(subcluster, selection.method = "vst", nfeatures = 2000)
+  subcluster = ScaleData(subcluster, verbose = FALSE, vars.to.regress = c("percent.mt", "S.Score", "G2M.Score"))
+  subcluster <- RunPCA(subcluster, npcs = 20, verbose = FALSE)
+  #ElboPlot(subcluster)
+  subcluster <- FindNeighbors(subcluster, dims = 1:10, resolution = 0.5)
+  subcluster <- RunUMAP(subcluster, dims = 1:10)
+  subcluster <- FindClusters(subcluster)
+  
+  DimPlot(subcluster, label=TRUE) %>% print(.)
+  DimPlot(subcluster, group.by="celltype", label=TRUE) %>% print(.)
+  (DimPlot(subcluster, reduction = 'umap', split.by = "orig.ident") + theme(text = element_text(size = 15)) + NoLegend())  %>% print(.)
+  
+    
+  save(subcluster, file = fn)
+  return(subcluster)
+}
+
+
+#subPCA(neural_gbm, "/home/dcha/glioblastoma/rdata/neural_gbm.RData")
+#subPCA(neural_precc, "/home/dcha/glioblastoma/rdata/neural_precc.RData")
+subPCA(neuralRoadmap, "/home/dcha/glioblastoma/rdata/neuralRoadmap.RData")
+subPCA(gbmRoadmap, "/home/dcha/glioblastoma/rdata/gbmRoadmap.RData")
+
+```
+
+### Prep for PC projections
+```{r}
+require(dplyr); require(tibble)
+set.seed(0)
+
+#load("/home/dcha/glioblastoma/rdata/neural_gbm.RData")
+
+cellType=neural_gbm@meta.data$celltype %>% as.data.frame()
+time=neural_gbm@meta.data$batch %>% strsplit("_") %>% lapply(., `[`, 1) %>% as.character() %>% as.data.frame()
+PCs=neural_gbm@reductions$pca@cell.embeddings %>% as.data.frame()
+
+fiftyPCs=bind_cols(cellType, time) %>% setNames(c("cellType","time")) %>% bind_cols(., PCs)
+fiftyPCs$cellType = fiftyPCs$cellType %>% droplevels()
+
+cellTypeDownSampled = fiftyPCs %>% dplyr::group_by(cellType) %>% sample_n(400) %>% as.data.frame()
+timeDownSampled = fiftyPCs %>% dplyr::group_by(time) %>% sample_n(1000) %>% as.data.frame()
+```
+
+### Prep for PC projections
+```{r}
+require(ggplot2)
+require(reshape2)
+#require(plot3D)
+#require(scatterplot3d)
+require(plotly)
+
+#my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+#             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+#            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+#             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+#toPlotColors = my_cols[levels(roadmapDf$celltype)]
+
+#timeDownSampled %>% ggplot(., aes(x=PC_2, y=1, colour=time, fill=time))+geom_tile()+theme_classic()+theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank())+coord_fixed(4)
+#timeDownSampled %>% ggplot(., aes(x=PC_2, y=PC_3, colour=time, fill=time))+geom_point(size=0.6, alpha=0.8)+theme_classic()
+
+#fiftyPCs %>% ggplot(., aes(x=PC_1, y=1, colour=cellType, fill=cellType))+geom_tile()+theme_classic()+theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank())+coord_fixed(4)
+
+#fiftyPCs %>% ggplot(., aes(x=PC_1, y=PC_2, colour=cellType, fill=cellType))+geom_point(size=0.3, alpha=0.8)+theme_classic()
+#+geom_point(size=0.3, alpha=0.8)
+#fiftyPCs %>% ggplot(., aes(x=PC_4, fill=time)) + geom_histogram()
+
+
+threedPCPlot=bind_rows(roadmapDf, sampled.tumorPCsDF, sampled.svzPCsDF) %>% plot_ly(., x=~PC_1, y=~PC_2, z=~PC_3, color=~celltype, colors=toPlotColors, marker=list(size=2)) %>%
+#add_markers() %>%
+layout(
+  scene=list(xaxis=list(title="PC1"),
+             yaxis=list(title="PC2"),
+             zaxis=list(title="PC3")),
+  legend = list(itemsizing='constant')
+)
+print(threedPCPlot)
+
+#fiftyPCs %>% ggplot(., aes(x=PC_1, y=1, colour=cellType, fill=cellType))+geom_tile()+theme_classic()+theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank())+coord_fixed(4)
+```
+
+### Destiny-prep
+```{r}
+require(dplyr); require(tibble)
+set.seed(0)
+setwd("/home/dcha/glioblastoma/diffusionEmbeddings")
+#raw.ct = read.xlsx('mmc4.xls', sheetName='Sheet1')
+#tGbmCount = neural_gbm@assays$RNA@counts %>% as.data.frame() %>% t(.) %>% as.data.frame()
+#tGbmCount %>% write.table(., file="neural_gbm_transposed.tsv", sep="\t", quote=F)
+
+#tGbmCount = read.table("neural_gbm_transposed.tsv", sep="\t", header=T)
+roadmapPCs = obj.final@reductions$pca@cell.embeddings[,1:10] %>% as.data.frame()
+roadmapMeta = obj.final@meta.data %>% dplyr::select(c(orig.ident,celltype)) %>% rownames_to_column(var="Cell")
+
+roadmapDf = bind_cols(roadmapMeta, roadmapPCs)
+roadmapDf$celltype = roadmapDf$celltype %>% droplevels(.)
+
+#cellTypeDownSampled = tGbm %>% dplyr::group_by(celltype) %>% sample_n(400) %>% as.data.frame()
+
+#cellTypeDownSampledMeta = cellTypeDownSampled[,c(1,2,3)]
+#cellTypeDownSampledCounts = cellTypeDownSampled %>% .[,c(1,4:ncol(.))]
+```
+
+### Destiny-prep
+```{r}
+require(destiny)
+require(xlsx)
+require(plotly)
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+#raw.ctTest=read.xlsx('mmc4.xls', sheetName='Sheet1')
+#ctTest = as.ExpressionSet(as.data.frame(raw.ctTest))
+
+destinyExpression=function(scDf){
+  scCounts=scDf %>% .[,c(1,4:ncol(.))]
+  scMeta = scDf[,c(1,2,3)]
+  tGbmPcExpr = as.ExpressionSet(scCounts)
+  tGbmPcExpr@phenoData$time = scMeta$orig.ident
+  tGbmPcExpr@phenoData$cellType = scMeta$celltype
+  return(tGbmPcExpr)
+}
+
+tGbmPcExpr=destinyExpression(roadmapDf)
+
+
+#num.cells <- gsub('^(\\d+)C.*$', '\\1', ct$Cell)
+#ct@phenoData$num.cells <- as.integer(num.cells)
+
+#have.duplications <- ct@phenoData$num.cells>1
+#normal.vals <- apply(exprs(ct), 2, function(sample) all(sample <= 28))
+
+#cleaned.ct <- ct[, have.duplications & normal.vals]
+tGbmDiffusion <- DiffusionMap(tGbmPcExpr, k=200, n_eigs=10)
+
+#PC_DC_transition = (MASS::ginv(as.matrix(roadmapPCs))) %*% tGbmDiffusion@eigenvectors
+#rownames(PC_DC_transition)=paste0("PC_",1:10)
+
+#tGbmDiffusionPred1=as.matrix(roadmapPCs) %*% PC_DC_transition
+tGbmDiffusionPred2=dm_predict(tGbmDiffusion, tGbmPcExpr)
+
+diffusionMeta = tGbmDiffusion@data_env$data %>% as.data.frame() %>% dplyr::select(c(Cell, time, cellType))
+diffusionEmbs = tGbmDiffusion@eigenvectors %>% as.data.frame()
+diffusionDF = bind_cols(diffusionMeta, diffusionEmbs)
+
+
+#plot(tGbmDiffusion, pch = 20, col_by = "cellType", legend_main="Cell Type")
+
+```
+
+### Destiny visualization
+```{r}
+require(destiny)
+require(plotly)
+require(gridExtra)
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816')
+
+toPlotColors = my_cols[levels(diffusionDF$cellType)]
+
+threedPlot = diffusionDF %>% plot_ly(., x=~DC1, y=~DC2, z=~DC3, color=~cellType, colors=toPlotColors, marker=list(size=2)) %>%
+add_markers() %>%
+layout(
+  showlegend = TRUE,
+  scene=list(xaxis=list(title="DC1"),
+             yaxis=list(title="DC2"),
+             zaxis=list(title="DC3")),
+  legend = list(itemsizing='constant')
+)
+print(threedPlot)
+
+tilePlot = function(num, legendBool=FALSE){
+  orderedDf = diffusionDF %>% arrange(!!sym(paste0("DC",num))) %>% mutate(tempOrder=1:nrow(.)) 
+  barcodePlot=ggplot(orderedDf, aes(x=tempOrder, y=1, colour=cellType, fill=cellType))+geom_tile()+
+    scale_colour_manual(values=toPlotColors)+scale_fill_manual(values=toPlotColors)+theme_classic()+
+  theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        legend.position=ifelse(legendBool,"right","none"))+ggtitle(paste0("DC",num))
+  return(barcodePlot)
+}
+
+barcodeList = list()
+for (num in 1:10){
+  barcodeList[[num]] = tilePlot(num)
+}
+
+tilePlot(1, legendBool=TRUE)
+do.call(grid.arrange, c(barcodeList, list(ncol=2)))
+
+
+```
+
+### Human snRNAseq objects
+```{r}
+set.seed(0)
+setwd("/home/dcha/glioblastoma/diffusionEmbeddings")
+#load("/home/dcha/glioblastoma/rdata/tumor_harmony.RData")
+#load("/home/dcha/glioblastoma/rdata/svz_harmony.RData")
+#humanTumor=tumor
+#humanSVZ=svz
+#remove(tumor)
+#remove(svz)
+
+#humanTumorGenes = humanTumor@assays$RNA@counts %>% rownames(.)
+#humanSVZGenes = humanSVZ@assays$RNA@counts %>% rownames(.)
+#humanIntersectGenes = intersect(humanTumorGenes, #humanSVZGenes)
+#humanIntersectGenes %>% write.table(., file="humanIntersectGenes.txt", sep="\t", quote=F, row.names = F, col.names = F)
+
+humanTumorCounts = humanTumor@assays$RNA@counts %>% as.data.frame() %>% t(.) %>% as.data.frame() 
+humanTumorCounts %>% write.table(., file="humanTumorCounts.tsv", quote=F, sep="\t",row.names = T, col.names = T)
+
+humanSVZCounts = humanSVZ@assays$RNA@counts %>% as.data.frame() %>% t(.) %>% as.data.frame() 
+humanSVZCounts %>% write.table(., file="humanSVZCounts.tsv", quote=F, sep="\t",row.names = T, col.names = T)
+
+#mouseGenes=gbmRoadmap@assays$RNA@counts %>% rownames(.)
+#mouseGenes %>% as.data.frame() %>% write.table(., file="mouseGenes.txt", sep="\t", quote=F, row.names=F, col.names=F)
+
+vst_genes = gbmRoadmap@reductions$pca@feature.loadings %>% as.data.frame() %>% rownames(.)
+vst_genes %>% as.data.frame() %>% write.table(., file="vst_genes.txt", quote=F, row.names=F, col.names = F)
+#mus2hom = read.table("mus2hom.mouseGenes.count.txt", header=T, sep="\t")
+
+vst.mus2hom = read.table("mus2hom.vst_genes.count.txt", header=T, sep="\t")
+vst.shared.genes = vst.mus2hom %>% filter(description==".") %>% filter(human!="<NA>") %>% filter(human %in% humanIntersectGenes)
+
+humanGenesToPC.loading = gbmRoadmap@reductions$pca@feature.loadings %>% as.data.frame() %>% rownames_to_column('mouseGene') %>% filter(mouseGene %in% vst.shared.genes$mouse) %>% column_to_rownames('mouseGene')
+rownames(humanGenesToPC.loading) = vst.shared.genes$human
+
+subsetHumanTumorCounts = humanTumorCounts %>% select(rownames(humanGenesToPC.loading))
+
+subsetHumanSVZCounts = humanSVZCounts %>% select(rownames(humanGenesToPC.loading))
+
+pcEmbeddingHumanTumor=as.matrix(subsetHumanTumorCounts) %*% as.matrix(humanGenesToPC.loading)
+
+pcEmbeddingHumanSVZ=as.matrix(subsetHumanSVZCounts) %*% as.matrix(humanGenesToPC.loading)
+
+tumorPCsDF = pcEmbeddingHumanTumor[,1:10] %>% as.data.frame() %>% mutate(Cell=paste0("humanTumor",1:nrow(.)), .before=PC_1) %>% 
+  mutate(orig.ident="null", .before=PC_1) %>% mutate(celltype="HumanTumorCells", .before=PC_1)
+sampled.tumorPCsDF = tumorPCsDF %>% sample_n(1000)
+
+svzPCsDF = pcEmbeddingHumanSVZ[,1:10] %>% as.data.frame() %>% mutate(Cell=paste0("humanSVZ",1:nrow(.)), .before=PC_1) %>% 
+  mutate(orig.ident="null", .before=PC_1) %>% mutate(celltype="HumanSVZCells", .before=PC_1)
+sampled.svzPCsDF = svzPCsDF %>% sample_n(1000)
+
+mouseHumanPCsDF=bind_rows(roadmapDf, sampled.tumorPCsDF, sampled.svzPCsDF)
+```
+
+
+```{r}
+require(destiny)
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "HumanTumorCells"="#14522d", "HumanSVZCells"="#a8ffcb")
+
+#pcEmbeddingHumanTumor.expr = as.ExpressionSet(pcEmbeddingHumanTumor[,1:10] %>% as.data.frame())
+#pcEmbeddingHumanSVZ.expr = as.ExpressionSet(pcEmbeddingHumanSVZ[,1:10] %>% as.data.frame())
+
+#tumorDiffusion = dm_predict(tGbmDiffusion, pcEmbeddingHumanTumor.expr) %>% as.data.frame()
+#svzDiffusion = dm_predict(tGbmDiffusion, pcEmbeddingHumanSVZ.expr) %>% as.data.frame()
+
+tumorDiffusionDF = tumorDiffusion %>% mutate(Cell=paste0("humanTumor",1:nrow(.)), .before=DC1) %>% 
+  mutate(time="null", .before=DC1) %>% mutate(cellType="HumanTumorCells", .before=DC1)
+sampled.tumorDiffusionDF = tumorDiffusionDF %>% sample_n(1000)
+
+
+svzDiffusionDF = svzDiffusion %>% mutate(Cell=paste0("humanSVZ",1:nrow(.)), .before=DC1) %>% 
+  mutate(time="null", .before=DC1) %>% mutate(cellType="HumanSVZCells", .before=DC1)
+sampled.svzDiffusionDF = svzDiffusionDF %>% sample_n(1000)
+
+mouseHumanDiffusionDF = bind_rows(diffusionDF, sampled.tumorDiffusionDF, sampled.svzDiffusionDF)
+mouseHumanDiffusionDF$cellType = factor(mouseHumanDiffusionDF$cellType)
+
+toPlotColors = my_cols[levels(mouseHumanDiffusionDF$cellType)]
+
+threedPlot = function(df){
+  toPlot=df %>% plot_ly(., x=~DC2, y=~DC3, z=~DC5, color=~cellType, colors=toPlotColors, marker=list(size=2)) %>%
+  add_markers() %>%
+  layout(
+    showlegend = TRUE,
+    scene=list(xaxis=list(title="DC2"),
+               yaxis=list(title="DC3"),
+               zaxis=list(title="DC5")),
+    legend = list(itemsizing='constant')
+  )
+  print(toPlot)
+}
+
+tilePlot = function(num, legendBool=FALSE){
+  orderedDf = diffusionDF %>% arrange(!!sym(paste0("DC",num))) %>% mutate(tempOrder=1:nrow(.)) 
+  barcodePlot=ggplot(orderedDf, aes(x=tempOrder, y=1, colour=cellType, fill=cellType))+geom_tile()+
+    scale_colour_manual(values=toPlotColors)+scale_fill_manual(values=toPlotColors)+theme_classic()+
+  theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        legend.position=ifelse(legendBool,"right","none"))+ggtitle(paste0("DC",num))
+  return(barcodePlot)
+}
+
+barcodeList = list()
+for (num in 1:10){
+  barcodeList[[num]] = tilePlot(num)
+}
+
+tilePlot(1, legendBool=TRUE)
+do.call(grid.arrange, c(barcodeList, list(ncol=2)))
+
+threedPlot(diffusionDF)
+threedPlot(tumorDiffusionDF)
+threedPlot(svzDiffusionDF)
+threedPlot(mouseHumanDiffusionDF)
+
+```
+

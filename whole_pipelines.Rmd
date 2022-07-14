@@ -1,0 +1,3490 @@
+---
+title: "seurat"
+output: html_document
+---
+
+### InferCNV-to-phylogenetic tree
+```{r}
+require(dplyr); require(phangorn); require(ape)
+humanNum="human_R1"
+
+inferCnvObj=readRDS(paste0("~/02.glioblastoma_scRNAseq/rdata/infercnv/",humanNum,"_inferCnvObj.rds"))
+obsCnvAll = inferCnvObj@expr.data %>% t(.)
+cell.idx=inferCnvObj@observation_grouped_cell_indices[["Tumor-like"]]
+obsCnv=obsCnvAll[cell.idx,]
+
+binSize=30
+
+binCnv=obsCnv[,1:binSize] %>% rowMeans(.) %>% as.matrix(.)
+for (b in 1:(floor(ncol(obsCnv)/binSize)-1)){
+  newColAvgVector=obsCnv[,(b*binSize):((b+1)*binSize)] %>% rowMeans(.)
+  binCnv=cbind(binCnv,newColAvgVector)
+}
+colnames(binCnv)=paste0("bin", 1:ncol(binCnv))
+
+diploCnv=round(binCnv*2,0)
+phyloLevels=diploCnv %>% table(.) %>% names(.)
+diploCnv.phy = as.phyDat(diploCnv, type="USER", levels=phyloLevels)
+
+#dist_tree=dist(diploCnv, method="manhattan")
+dist_tre = dist.gene(diploCnv)
+
+tre.ini = nj(dist_tre)
+tre.pars = optim.parsimony(tre.ini, diploCnv.phy)
+
+#pml_fit = pml(tre.ini, data=diploCnv.phy)
+#pml_fit_JC =  optim.pml(pml_fit, TRUE)
+#bs = bootstrap.pml(pml_fit_JC, bs=100, optNni=TRUE,
+#    control = pml.control(trace = 0))
+#treeRatchet=pratchet(diploCnv.phy, trace = 0)
+#treeRatchet  = acctran(treeRatchet, diploCnv.phy)
+
+#toPlotTree=midpoint(treeRatchet)
+#toPlotTree$tip.label = rep("", length(toPlotTree$tip.label ))
+```
+
+### Aligning with Conos
+```{r}
+require(conos)
+
+#obj_pre_conos.panel = SplitObject(obj_pre_conos, split.by = "batch")
+#for (i in 1:length(obj_pre_conos.panel)) {
+#    obj_pre_conos.panel[[i]] = NormalizeData(obj_pre_conos.panel[[i]]) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(verbose = FALSE)
+#}
+#obj.do_conos = Conos$new(obj_pre_conos.panel)
+obj.do_conos$buildGraph(k = 15, k.self = 5, space = "PCA", ncomps = 20, n.odgenes = 2000, matching.method = "mNN", 
+    metric = "angular", score.component.variance = TRUE, verbose = TRUE)
+obj.do_conos$findCommunities()
+obj.do_conos$embedGraph()
+obj.conos = as.Seurat(obj.do_conos)
+
+```
+
+### opc_tumor_no
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/newRDS")
+lins=c("linA_sce", "linA_seurat", "linB_sce", "linB_seurat", "opc_precc1_sce", "opc_precc1_seurat")
+for (lin in lins){
+old_rds=readRDS(paste0("old.",lin,".rds"))
+opc_tumor=old_rds@colData[,c("celltype","orig.ident")] %>% as.data.frame(.) %>% filter(celltype=="OPC") %>% filter(orig.ident=="Tumor") %>% rownames(.)
+non_opc_tumor=setdiff(colnames(old_rds), opc_tumor)
+new_rds=old_rds[,non_opc_tumor]
+saveRDS(new_rds, paste0(lin,".rds"))
+}
+```
+
+```{r}
+require(rgl)
+#opc_cop_tumor=obj.fastmnn_finalAnnot@meta.data %>% filter(celltype%in%c("OPC","COP")) %>% filter(orig.ident=="Tumor") %>% rownames(.)
+#obj.fastmnn_finalAnnot$opc_cop_tumor=ifelse(Cells(obj.fastmnn_finalAnnot)%in%opc_cop_tumor, "yes", "no")
+#obj.fastmnn_finalAnnot@meta.data = obj.fastmnn_finalAnnot@meta.data %>% mutate(celltype2=case_when(opc_cop_tumor=="no"~celltype, opc_cop_tumor=="yes"~paste0(celltype, "_tumor")))
+
+#obj.fastmnn_pc15=obj.fastmnn_finalAnnot %>% fastMNN_seurat(., nDim=15, clusterResolution = 2)
+obj.fastmnn_pc25=obj.fastmnn_finalAnnot %>% fastMNN_seurat(., nDim=25, clusterResolution = 2)
+
+ob.reducedmnn_pc15=obj.fastmnn_finalAnnot %>% reducedMNN_seurat(., nDim=15, clusterResolution = 2)
+ob.reducedmnn_pc20=obj.fastmnn_finalAnnot %>% reducedMNN_seurat(., nDim=20, clusterResolution = 2)
+ob.reducedmnn_pc25=obj.fastmnn_finalAnnot %>% reducedMNN_seurat(., nDim=25, clusterResolution = 2)
+
+ob.reducedmnn_pc30=obj.fastmnn_finalAnnot %>% reducedMNN_seurat(., nDim=30, clusterResolution = 2)
+
+#obj.fastmnn_finalAnnot %>% DimPlot(., group.by="celltype2")
+tempColors=c("OPC_tumor"="#222222", "COP_tumor"="#777777")
+tempAnnotCols=c(newAnnotCols, tempColors)
+
+plotcol=tempAnnotCols[obj.fastmnn_finalAnnot.umap3d$celltype2 %>% as.character()]
+plot3d(obj.fastmnn_finalAnnot.umap3d@reductions$umap@cell.embeddings, col=plotcol)
+
+obj.fastmnn_pc15 %>% DimPlot(., group.by = "celltype2", label=T, cols=newAnnotCols)
+obj.fastmnn_pc15.umap3d=obj.fastmnn_pc15 %>% RunUMAP(., n.components = 3, reduction="fastmnn", dims=1:15)
+obj.fastmnn_finalAnnot.umap3d=obj.fastmnn_finalAnnot %>% RunUMAP(., n.components = 3, reduction="fastmnn", dims=1:20)
+
+```
+
+```{r}
+cds_subObj_OPCroot %>% plot_monocle3(., toPlot="celltype")
+cds_subObj_OPCroot@colData$opc_tumor=ifelse(colnames(cds_subObj_OPCroot)%in%opc_tumor, "yes", "no")
+
+cds_subObj_OPCroot_metadata = cds_subObj_OPCroot@colData %>% as.data.frame(.)
+cds_subObj_OPCroot_metadata$celltype = cds_subObj_OPCroot_metadata$celltype %>% as.character(.)
+cds_subObj_OPCroot_metadata = cds_subObj_OPCroot_metadata %>% mutate(celltype2=case_when(opc_tumor=="no"~celltype, opc_tumor=="yes"~paste0(celltype, "_tumor")))
+cds_subObj_OPCroot_metadata$celltype2 = cds_subObj_OPCroot_metadata$celltype2 %>% factor(., levels=c("OPC", "OPC_tumor", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2"))
+cds_subObj_OPCroot@colData$celltype2=cds_subObj_OPCroot_metadata$celltype2
+cds_subObj_OPCroot %>% plot_monocle3(., toPlot="celltype2")
+
+
+```
+### External scRNAseq SLC35A2 confirm
+```{r}
+require(tibble)
+
+nagy.mdd=cellranger2Seurat(data_dir="/home/ryuny43/scRNAseq_SLC35A2/mdd_5000",project_name = "nagy.mdd",  species="human")
+nagy.mdd = nagy.mdd %>% runSeuratPCA(., ndim=15) %>% runSeuratUMAP(., ndim=15)
+```
+
+### Human logNorm patients-corrected => Reanme based on 
+```{r}
+human.fastmnn.ndim10 = human.fastmnn.ndim15 %>% fastMNN_seurat(., nDim=10, anchorFeature="subjects", clusterResolution=1.5)
+
+human.fastmnn.ndim10@meta.data=
+  human.fastmnn.ndim10@meta.data %>% 
+  mutate(celltype=case_when(
+    seurat_clusters%in%c("14", "25", "26","31","32")~"Neuron",
+    seurat_clusters%in%c("24")~"OPC",
+    seurat_clusters%in%c("27")~"AC",
+    seurat_clusters%in%c("0","7","8","15","16","21","22", "29", "30")~"OL",
+    seurat_clusters%in%c("4","13","18","19","20","23", "28")~"Immune",
+    TRUE~"Tumor-like"
+    ))
+
+Idents(human.fastmnn.ndim10)=human.fastmnn.ndim10$celltype
+saveRDS(human.fastmnn.ndim10, "/home/dcha/02.glioblastoma_scRNAseq/rdata/human.fastmnn.ndim10.rds")
+
+human_R1=human.fastmnn.ndim10 %>% subset(., subset=subjects=="human_R1")
+human_R2=human.fastmnn.ndim10 %>% subset(., subset=subjects=="human_R2")
+human_R3=human.fastmnn.ndim10 %>% subset(., subset=subjects=="human_R3")
+
+human_R1@assays$RNA@counts %>% as.data.frame() %>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R1.count.txt",  sep="\t", quote=FALSE, row.names = T, col.names = TRUE)
+human_R1@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R1.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+
+human_R2@assays$RNA@counts %>%as.data.frame()%>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R2.count.txt",  sep="\t", quote=FALSE, row.names = TRUE, col.names = TRUE)
+human_R2@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R2.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+
+human_R3@assays$RNA@counts %>% as.data.frame()%>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R3.count.txt",  sep="\t", quote=FALSE, row.names = TRUE, col.names = TRUE)
+human_R3@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R3.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+```
+
+## Aligning data for each subject (patient1, 2, 3 / SVZ+tumor for each)
+```{r}
+#human.fastmnn.ndim15 = readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/human.logNorm.fastmnn.rds")
+human_R1=human.fastmnn.ndim15 %>% subset(., subset=subjects=="human_R1")
+human_R2=human.fastmnn.ndim15 %>% subset(., subset=subjects=="human_R2")
+human_R3=human.fastmnn.ndim15 %>% subset(., subset=subjects=="human_R3")
+
+#human_R1@assays$RNA@counts %>% as.data.frame() %>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R1.count.txt",  sep="\t", quote=FALSE, row.names = T, col.names = TRUE)
+#human_R1@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R1.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+
+#human_R2@assays$RNA@counts %>%as.data.frame()%>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R2.count.txt",  sep="\t", quote=FALSE, row.names = TRUE, col.names = TRUE)
+#human_R2@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R2.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+
+#human_R3@assays$RNA@counts %>% as.data.frame()%>% data.table::fwrite(.,file="/home/jsh/dcha_gbm/rdata/infercnv/human_R3.count.txt",  sep="\t", quote=FALSE, row.names = TRUE, col.names = TRUE)
+#human_R3@meta.data %>% dplyr::select(celltype) %>% data.table::fwrite(., file="/home/jsh/dcha_gbm/rdata/infercnv/human_R3.celltype.txt", sep="\t", row.names=T, col.names = F, quote=F)
+```
+
+
+
+### CellCycleGenes Preparation
+```{r}
+cellCycleGenes=function(species="human"){
+  require(AnnotationHub); require(ensembldb); require(dplyr)
+  ah = AnnotationHub()
+  if (species=="human"){
+    cell_cycle_genes = read.csv("/home/public/ref/00_Ref_GRCh38/annot/human.cellCycleGenes.hbc.tinyatlas.csv")
+    ahDb = query(ah, pattern = c("Homo sapiens", "EnsDb"), ignore.case = TRUE)
+  }else if (species=="mouse"){
+    cell_cycle_genes = read.csv("/home/public/ref/00_Ref_mm10/annot/mouse.cellCycleGenes.hbc.tinyatlas.csv")
+    ahDb = query(ah, pattern = c("Mus musculus", "EnsDb"), ignore.case = TRUE)
+  }
+  
+  print("Acquire the latest annotation files")
+  id = ahDb %>% mcols() %>% rownames() %>% tail(1)
+  
+  print("Download the appropriate Ensembldb database")
+  edb = ah[[id]]
+  
+  print("Extract gene-level information from database")
+  annotations = genes(edb,return.type = "data.frame")
+  annotations = annotations %>% dplyr::select(gene_id, gene_name, seq_name, gene_biotype, description)
+  
+  print("Get gene names for Ensembl IDs for each gene")
+  cell_cycle_markers = left_join(cell_cycle_genes, annotations, by = c("geneID" = "gene_id"))
+  
+  print("Acquire the S phase genes")
+  s_genes = cell_cycle_markers %>% dplyr::filter(phase == "S") %>% pull("gene_name")
+  
+  print("Acquire the G2M phase genes")        
+  g2m_genes = cell_cycle_markers %>% dplyr::filter(phase == "G2/M") %>%  pull("gene_name")
+  return(list(s_genes,g2m_genes))
+}
+#ccgenes_human=cellCycleGenes("human")
+#ccgenes_mouse=cellCycleGenes("mouse")
+```
+
+### Data assembly
+
+```{r}
+require(Seurat)
+require(dplyr)
+require(cowplot)
+require(ggplot2)
+require(patchwork)
+require(DoubletFinder)
+
+mito.ribo.cellCycle=function(obj, species="human"){
+  require(Seurat)
+  if(species=="human"){
+    cellCycleGenesList=readRDS("/home/public/ref/metaTexts/cellCycleGenes_human.rds")
+    percent.mt = PercentageFeatureSet(obj, pattern = "^MT-")
+    percent.rp = PercentageFeatureSet(obj, pattern = "^RP[S,L]")
+    percent.mrp = PercentageFeatureSet(obj, pattern = "^MRP[S,L]")
+    percent.fau = PercentageFeatureSet(obj, pattern = "FAU")
+    percent.uba52 = PercentageFeatureSet(obj, pattern = "UBA52")
+  }else if(species=="mouse"){
+    cellCycleGenesList=readRDS("/home/public/ref/metaTexts/cellCycleGenes_mouse.rds")
+    percent.mt = PercentageFeatureSet(obj, pattern = "^mt-")
+    percent.rp = PercentageFeatureSet(obj, pattern = "^Rp[s,l]")
+    percent.mrp = PercentageFeatureSet(obj, pattern = "^Mrp[s,l]")
+    percent.fau = PercentageFeatureSet(obj, pattern = "Fau")
+    percent.uba52 = PercentageFeatureSet(obj, pattern = "Uba52")
+  }else{
+    cellCycleGenesList=readRDS("/home/public/ref/metaTexts/cellCycleGenes_human.rds")
+    percent.mt = PercentageFeatureSet(obj, pattern = "^MT-")
+    percent.rp = PercentageFeatureSet(obj, pattern = "^RP[S,L]")
+    percent.mrp = PercentageFeatureSet(obj, pattern = "^MRP[S,L]")
+    percent.fau = PercentageFeatureSet(obj, pattern = "FAU")
+    percent.uba52 = PercentageFeatureSet(obj, pattern = "UBA52")
+  }
+  
+  riboPerc=percent.rp+percent.mrp+percent.fau+percent.uba52
+  obj$percent.ribo=riboPerc
+  obj$percent.mt=percent.mt
+  obj = CellCycleScoring(obj, s.features = cellCycleGenesList[["s"]], g2m.features = cellCycleGenesList[["g2m"]], set.ident=TRUE)
+  return(obj)
+}
+
+
+cellranger2Seurat=function(data_dir, project_name, species="human", min_cells=3, min_features=200){
+  require(Seurat); require(dplyr); require(ggplot2)
+  cellrangerCounts=Read10X(data.dir = data_dir)
+  if (mode(cellrangerCounts)=="list"){
+    cellrangerCounts=cellrangerCounts[["Gene Expression"]]
+  }
+  obj=CreateSeuratObject(counts = cellrangerCounts, project = project_name, min.cells = min_cells, min.features = min_features)
+  obj=mito.ribo.cellCycle(obj, species)
+  return(obj)
+}
+
+#moghe.13.obj = cellranger2Seurat(data_dir="/home/ryuny43/controls_sample13/01.cellrangerCount/sample13/outs/filtered_feature_bc_matrix",project_name = "Moghe_Sample13", species="human")
+```
+
+### Doublet detection and filtering using DoubletFInder
+```{r}
+doubletFinderRun=function(obj, ndim=20){
+  require(dplyr); require(ggplot2); require(DoubletFinder); require(Seurat)
+  obj = obj %>% NormalizeData(.) %>%
+    FindVariableFeatures(., selection.method = "vst", nfeatures = 2000) %>%
+    ScaleData(.) %>% RunPCA(., npcs=ndim) %>% FindNeighbors(., dims=1:ndim) %>%
+    FindClusters(., resolution = 1.0) %>% RunUMAP(., dims = 1:ndim)
+  
+  DimPlot(obj, reduction = 'umap', label =TRUE) %>% print(.)
+  
+  ## pK Identification 
+  sweep.res.list = paramSweep_v3(obj, PCs = 1:ndim, sct = FALSE)
+  sweep.stats = summarizeSweep(sweep.res.list, GT = FALSE)
+  bcmvn = find.pK(sweep.stats)
+  bcmvn %>% ggplot(.,aes(x=pK, y=BCmetric, group=1))+geom_point()+geom_line() %>% print(.)
+  pK_optimal=(bcmvn %>% arrange(desc(BCmetric)))$pK[[1]] %>% as.character() %>% as.numeric()
+  
+  obj$clustersBeforeDoubletFinder = Idents(obj)
+  annotation = obj@meta.data$clustersBeforeDoubletFinder
+  
+  ## Homotypic Doublet proportion estimate
+  homotypic.prop = modelHomotypic(annotation)
+  
+  expectedDoubletRate=nrow(obj@meta.data)*0.000007589+0.0005272
+  nExp_poi = round(expectedDoubletRate*nrow(obj@meta.data))
+  nExp_poi.adj = round(nExp_poi*(1-homotypic.prop))
+  
+  doubletFinderColnames=c(colnames(obj@meta.data), "pANN", "DF.classifications_1")
+  
+  obj = doubletFinder_v3(obj, PCs = 1:ndim, pN = 0.25, pK = pK_optimal, nExp = nExp_poi, reuse.pANN = FALSE, sct = FALSE)
+  colnames(obj@meta.data)=doubletFinderColnames
+
+  obj = doubletFinder_v3(obj, PCs = 1:ndim, pN = 0.25, pK = pK_optimal, nExp = nExp_poi.adj, reuse.pANN = "pANN", sct = FALSE)
+  colnames(obj@meta.data)=c(doubletFinderColnames, "DF.classifications")
+  
+  table(obj$DF.classifications) %>% print(.)
+  DimPlot(obj, reduction = "umap", group.by = "DF.classifications") %>% print(.)
+  
+  obj$RNA_snn_res.1=NULL
+  obj$seurat_clusters=NULL
+  obj$pANN=NULL
+  obj$DF.classifications_1=NULL
+  
+  return(obj)
+}
+```
+
+
+### QC based on sample metrics
+```{r}
+qcPlot=function(obj, group_by=NULL){
+  require(dplyr); require(ggplot2); require(Seurat)
+  for (i in c("nFeature_RNA", "nCount_RNA", "percent.mt")) {
+    if (is.null(group_by)){
+      vlnPlot=obj@meta.data %>% ggplot(., aes(x=orig.ident, y=.[[i]]))
+    }else{
+      vlnPlot=obj@meta.data %>% ggplot(., aes(x=orig.ident, y=.[[i]], colour=.[[group_by]]))
+    }
+    vlnPlot=vlnPlot+geom_violin(alpha=0.4, position = position_dodge(width = .75),size=1)+geom_boxplot(alpha=0.4, position = position_dodge(width = .75),size=1,ch=TRUE, width = 0.3)+geom_jitter(size=0.4, alpha=0.3)+xlab(obj@project.name)+ylab(i)+scale_y_continuous(n.breaks=20)
+    print(vlnPlot)
+  }
+  obj %>% FeatureScatter(., feature1 = "nCount_RNA", feature2 = "percent.mt", group.by=group_by) %>% print(.)
+  obj %>% FeatureScatter(., feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by=group_by) %>% print(.)
+}
+
+#moghe.13.obj %>% qcPlot(.)
+
+#moghe.13.obj %>% qcPlot(., group_by="DF.classifications")
+```
+
+### Filtering cells under supervised manners
+```{r}
+
+moghe.13.filtered = subset(moghe.13.obj, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 & percent.mt < 5 & DF.classifications=="Singlet")
+
+save(moghe.13.filtered, file="/home/ryuny43/controls_sample13/02.seuratObjects/moghe.13.filtered.RData")
+```
+
+###  PCA / UMAP / tSNE / Louvain / SeuratCCA / Seurat RPCA / LIGER / Harmony / fastMNN / reducedMNN /
+```{r}
+runSeuratPCA=function(obj, ndim=10, regress=c(), normalization.method="LogNormalize", sct_method="glmGamPoi"){
+  require(dplyr); require(Seurat)
+  if (normalization.method=="LogNormalize"){
+    DefaultAssay(obj)="RNA"
+    obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(., selection.method = "vst", nfeatures = 2000) %>% ScaleData(., vars.to.regress=regress)
+  }else if(normalization.method=="SCT"){
+    require(glmGamPoi)
+    obj = obj %>% SCTransform(., method=sct_method, vars.to.regress=regress)
+  }else if(normalization.method=="None"){
+    obj = obj %>% ScaleData(., vars.to.regress=regress)
+  }else{
+    DefaultAssay(obj)="RNA"
+    obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(., selection.method = "vst", nfeatures = 2000) %>% ScaleData(., vars.to.regress=regress)
+  }
+  obj = obj %>% RunPCA(., npcs=ndim)
+}
+
+
+runSeurat.umap.louvain=function(obj, ndim=10, louvainResolution=1.0 , reductionName="pca", tsne=FALSE){
+    require(dplyr); require(Seurat)
+    obj = obj %>% RunUMAP(reduction = reductionName, dims = 1:ndim) %>% 
+    FindNeighbors(reduction = reductionName, dims = 1:ndim) %>% 
+    FindClusters(resolution = louvainResolution)
+    
+    if (tsne){
+      obj = obj %>% RunTSNE(reduction = reductionName, dims = 1:ndim)
+    }
+    return(obj)
+}
+
+wrapperRunHarmony=function(inputData,project_name="harmonyMerged", anchorFeature="orig.ident", ndim=10, louvainResolution=1.0, regress=c(), SCT_normalization=FALSE){
+  require(harmony); require(dplyr); require(Seurat)
+  if (mode(inputData)=="S4"){
+    print("[Seurat S4] detected")
+    data_vector=SplitObject(inputData, anchorFeature)
+  }else if(mode(inputData)=="list" & unique(as.character(lapply(inputData, function(x) mode(x))))=="S4"){
+    print("[list of Seurat S4] detected")
+  }else{
+    print("Please specify input data as [Seurat S4] or [list of Seurat S4s]")
+    return(NULL)
+  }
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+  merged.obj[["toAnchor"]] = merged.obj[[anchorFeature]]
+
+  if(SCT_normalization){
+    merged.obj = runSeuratPCA(merged.obj, ndim, regress, "SCT")
+    merged.obj = merged.obj %>% RunHarmony("toAnchor", plot_convergence = TRUE, assay.use="SCT")
+  }else{
+    merged.obj = runSeuratPCA(merged.obj, ndim, regress, "LogNormalize")
+    merged.obj = merged.obj %>% RunHarmony("toAnchor", plot_convergence = TRUE, assay.use="RNA")
+  }
+  
+  merged.obj %>% DimPlot(object = ., reduction = "pca", group.by = "toAnchor", pt.size = .1) %>% print(.)
+  merged.obj %>% VlnPlot(object = ., features = "PC_1", group.by = "toAnchor", pt.size = 0) %>% print(.)
+  
+  merged.obj %>% DimPlot(object = ., reduction = "harmony", group.by = "toAnchor", pt.size = .1) %>% print(.)
+  merged.obj %>% VlnPlot(object = ., features = "harmony_1", group.by = "toAnchor", pt.size = 0) %>% print(.)
+  
+  # Downstream analysis
+  merged.obj = runSeurat.umap.louvain(merged.obj, ndim, louvainResolution, reductionName="harmony")
+  
+  merged.obj %>% DimPlot(., reduction = "umap",label = TRUE, pt.size = .1) %>% print(.)
+  merged.obj %>% DimPlot(., reduction = "umap",group.by = "toAnchor",label = TRUE, pt.size = .1) %>% print(.)
+  return(merged.obj)
+}
+
+wrapperRunSeuratCCA=function(inputData,project_name="CCA_Merged", anchorFeature="orig.ident", ndim=30, louvainResolution=1.0, regress=c(), SCT_normalization=FALSE, k.weights=100, memMB=20000){
+  require(dplyr); require(Seurat); require(glmGamPoi)
+  options(future.globals.maxSize=memMB * 1024^2)
+  if (mode(inputData)=="S4"){
+    print("[Seurat S4] detected")
+    data_vector=SplitObject(inputData, anchorFeature)
+  }else if(mode(inputData)=="list" & unique(as.character(lapply(inputData, function(x) mode(x))))=="S4"){
+    print("[list of Seurat S4] detected")
+  }else{
+    print("Please specify input data as [Seurat S4] or [list of Seurat S4s]")
+    return(NULL)
+  }
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+
+  individual_list = SplitObject(merged.obj, split.by = anchorFeature)
+  minCellNum=individual_list %>% lapply(., function(x) length(Cells(x))) %>% unlist(.) %>% min(.)
+  k.weights=min(k.weights, minCellNum)
+
+  if(SCT_normalization){
+    individual_list = lapply(X = individual_list, function(x) SCTransform(x, method="glmGamPoi", vars.to.regress = regress))
+    SCT_features=SelectIntegrationFeatures(object.list = individual_list, nfeatures=3000) ### Seurat suggestion
+    individual_list=PrepSCTIntegration(object.list = individual_list, anchor.features = SCT_features)
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, normalization.method = "SCT", anchor.features = SCT_features)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim, normalization.method = "SCT", k.weight = k.weights)
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% RunPCA(., npcs=ndim)
+  }else{
+    individual_list = lapply(X = individual_list, FUN = NormalizeData)
+    individual_list = lapply(X = individual_list, FUN = FindVariableFeatures)
+    features = SelectIntegrationFeatures(object.list = individual_list)
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, anchor.features = features)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim, k.weight = k.weights)
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% ScaleData(.) %>% RunPCA(., npcs=ndim)
+  }
+ 
+  obj_integrated = obj_integrated %>% runSeurat.umap.louvain(., ndim=ndim, louvainResolution=louvainResolution)
+  return(obj_integrated)
+}
+
+wrapperRunSeuratRPCA=function(inputData,project_name="RPCA_Merged", anchorFeature="orig.ident", ndim=30, louvainResolution=1.0, regress=c(), SCT_normalization=FALSE, k.anchors=5, memMB=20000){
+  require(dplyr); require(Seurat); require(glmGamPoi)
+  options(future.globals.maxSize=memMB * 1024^2)
+  if (mode(inputData)=="S4"){
+    print("[Seurat S4] detected")
+    data_vector=SplitObject(inputData, anchorFeature)
+  }else if(mode(inputData)=="list" & unique(as.character(lapply(inputData, function(x) mode(x))))=="S4"){
+    print("[list of Seurat S4] detected")
+  }else{
+    print("Please specify input data as [Seurat S4] or [list of Seurat S4s]")
+    return(NULL)
+  }
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+
+  individual_list = SplitObject(merged.obj, split.by = anchorFeature)
+  #minCellNum=individual_list %>% lapply(., function(x) length(Cells(x))) %>% unlist(.) %>% min(.)
+  #k.weights=min(k.weights, minCellNum)
+
+  if(SCT_normalization){
+    individual_list = lapply(X = individual_list, function(x) runSeuratPCA(x, ndim=ndim, normalization.method="SCT", regress = regress))
+    SCT_features=SelectIntegrationFeatures(object.list = individual_list, nfeatures=3000) ### Seurat suggestion
+    individual_list=PrepSCTIntegration(object.list = individual_list, anchor.features = SCT_features)
+    RPCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, normalization.method = "SCT", anchor.features = SCT_features, k.anchor = k.anchors, reduction="rpca")
+    obj_integrated = IntegrateData(anchorset = RPCA_anchors, dims = 1:ndim, normalization.method = "SCT")
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% RunPCA(., npcs=ndim)
+  }else{
+    individual_list = lapply(X = individual_list, function(x) runSeuratPCA(x, ndim=ndim, regress = regress))
+    features = SelectIntegrationFeatures(object.list = individual_list)
+    RPCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, anchor.features = features, k.anchor = k.anchors, reduction="rpca")
+    obj_integrated = IntegrateData(anchorset = RPCA_anchors, dims = 1:ndim)
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% ScaleData(.) %>% RunPCA(., npcs=ndim)
+  }
+ 
+  obj_integrated = obj_integrated %>% runSeurat.umap.louvain(., ndim=ndim, louvainResolution=louvainResolution)
+  return(obj_integrated)
+}
+
+
+cca_anchor_transfer=function(query_obj, ref_obj, nDim=30, mnn=FALSE, mnn_feature="batch"){
+  require(Seurat); require(dplyr)
+  ref_obj=ref_obj %>% runSeuratPCA(., ndim=nDim)
+  cca.anchors = FindTransferAnchors(reference = ref_obj, query = query_obj, features = VariableFeatures(object = ref_obj),
+                                       reference.assay = "RNA", query.assay = "RNA", reduction = "cca")
+  predictions = TransferData(anchorset = cca.anchors, refdata = ref_obj$celltype,
+                             dims = 1:nDim, weight.reduction="cca")
+  query_obj$celltype_prev=query_obj$celltype
+  query_obj$celltype=predictions[["predicted.id"]]
+  
+  if(mnn){
+    ref_obj = ref_obj %>% reducedMNN_seurat(., nDim=nDim, anchorFeature=mnn_feature)
+    query_obj = MapQuery(anchorset=cca.anchors, reference=ref_obj, query=query_obj,
+                         refdata = list(celltype = "celltype"), reference.reduction = "reducedmnn", reduction.model = "umap") 
+  }else{
+    ref_obj = ref_obj %>% RunUMAP(., dims=1:nDim, reduction="pca", return.model = TRUE)
+    query_obj = MapQuery(anchorset=cca.anchors, reference=ref_obj, query=query_obj,
+                         refdata = list(celltype = "celltype"), reference.reduction = "pca", reduction.model = "umap") 
+  }
+  resList=list(query_obj, ref_obj)
+  names(resList)=c("query", "ref")
+  return(resList)
+}
+
+transferLatentSpace=function(query_obj, ref_obj, nDim=30, latentSpace="pca"){
+  require(Seurat); require(dplyr)
+  if(unique(dim(Loadings(ref_obj[[latentSpace]]))==0)){
+    ref_obj[[latentSpace]]@feature.loadings=(ref_obj[[ref_obj[[latentSpace]]@assay.used]]@scale.data) %*% MASS::ginv(t(ref_obj[[latentSpace]]@cell.embeddings))
+    colnames(ref_obj[[latentSpace]]@feature.loadings)=colnames(ref_obj[[latentSpace]]@cell.embeddings)
+  }
+  transfer.anchors = FindTransferAnchors(reference = ref_obj, query = query_obj, dims = 1:nDim, reference.reduction = latentSpace)
+  predictions = TransferData(anchorset = transfer.anchors, refdata = ref_obj$celltype, dims = 1:nDim)
+  query_obj$celltype_prev=query_obj$celltype
+  query_obj$celltype=predictions[["predicted.id"]]
+  resList=list(query_obj, ref_obj)
+  names(resList)=c("query", "ref")
+  return(resList)
+}
+
+
+reducedMNN_seurat=function(obj, nDim=10,  anchorFeature="batch",  clusterResolution=1.0, SEED=100, reduction="pca"){
+  require(batchelor); require(Seurat); require(dplyr)
+  set.seed(SEED)
+  seuratPCs=obj@reductions[[reduction]]@cell.embeddings[,1:nDim]
+  reducedMNN.obj = reducedMNN(seuratPCs, batch=obj@meta.data[[anchorFeature]])
+
+  batchelor_reducedMNN_correctedPCs=reducedMNN.obj$corrected
+  colnames(batchelor_reducedMNN_correctedPCs) = 1:ncol(batchelor_reducedMNN_correctedPCs) %>% paste0("reducedMNN_", .)
+  obj[["reducedmnn"]] = CreateDimReducObject(embeddings = batchelor_reducedMNN_correctedPCs, key = "reducedMNN_", assay = DefaultAssay(obj))
+  obj = obj %>% runSeurat.umap.louvain(., ndim=nDim, reductionName="reducedmnn", louvainResolution = clusterResolution)
+
+  return(obj)
+}
+
+fastMNN_seurat=function(obj, nDim=10, anchorFeature="batch", clusterResolution=1.0, SEED=100, SCT_normalization=FALSE, alreadyNormalized=FALSE){
+  require(batchelor); require(Seurat); require(dplyr); require(glmGamPoi)
+  set.seed(SEED)
+  
+  if(!alreadyNormalized){
+    if(SCT_normalization){
+      obj = obj %>% SCTransform(., method = "glmGamPoi")
+    }else{
+      DefaultAssay(obj)="RNA"
+      obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(.)
+    } 
+  }
+
+  chosen.hvgs=obj[[DefaultAssay(obj)]]@var.features
+  seuratCount=obj[[DefaultAssay(obj)]]@counts
+  seuratLogCount=obj[[DefaultAssay(obj)]]@data
+  sce= SingleCellExperiment(list(counts=seuratCount, logcounts=seuratLogCount),
+                                     colData=obj@meta.data)
+  
+  sce = fastMNN(sce, batch=sce[[anchorFeature]], subset.row=chosen.hvgs, d=nDim)
+  
+  batchelor_fastMNN_correctedPCs=sce@int_colData$reducedDims$corrected
+  colnames(batchelor_fastMNN_correctedPCs) = 1:ncol(batchelor_fastMNN_correctedPCs) %>% paste0("fastMNN_", .)
+  obj[["fastmnn"]] = CreateDimReducObject(embeddings = batchelor_fastMNN_correctedPCs, key = "fastMNN_", assay = DefaultAssay(obj))
+  obj = obj %>% runSeurat.umap.louvain(., ndim=nDim, reductionName="fastmnn", louvainResolution = clusterResolution)
+
+  return(obj)
+}
+
+#tt_MNN = tt %>% reducedMNN_seurat(., nDim = 30, reduction = "pca", anchorFeature = "batch")
+```
+
+
+### BBKNN batch-balancing (from PCA -> NearestNeigbor/UMAP)
+```{r}
+seurat_to_bbknn=function(obj, path=NULL){
+  require(Seurat); require(dplyr)
+  if(is.null(path)){
+    path=getwd()
+  }
+  setwd(path)
+  highVarGenes = obj@reductions$pca@feature.loadings %>% rownames(.)
+  rawHighVarCounts=obj@assays$RNA@counts %>% as.matrix() %>% t(.) %>% .[,highVarGenes] %>% as.data.frame(.)
+  metaDf=obj@meta.data %>% dplyr::select(c(batch, orig.ident, celltype)) %>% setNames(c("batch", "timePoint", "cellType"))
+  rawHighVarCounts %>% data.table::fwrite(., "rawHighVarCounts.csv", sep=",", row.names=T)
+  metaDf %>% data.table::fwrite(., "metaDf.csv", sep=",", row.names=T)
+  
+  pcaEmb=obj@reductions$pca@cell.embeddings %>% as.data.frame(.)
+  pcaTransition=obj@reductions$pca@feature.loadings %>% as.data.frame(.)
+  pcaVar=(obj@reductions$pca@stdev)^2
+  pcaVarRatio=pcaVar/sum(pcaVar)
+  pcaVarDf=bind_cols(pcaVar, pcaVarRatio) %>% as.data.frame() %>% setNames(c("variance", "variance_ratio"))
+  
+  pcaEmb %>% data.table::fwrite(., "seuratPcaEmb.csv", sep=",", row.names=T)
+  pcaVarDf %>% data.table::fwrite(., "seuratPcaVar.csv", sep=",", row.names=T)
+  pcaTransition %>% data.table::fwrite(., "seuratPcaTransition.csv", sep=",", row.names=T)
+}
+
+bbknn_to_Seurat=function(obj, path=NULL, clusterResolution=1.0){
+  require(reticulate); require(Seurat); require(dplyr)
+  use_python("/home/public/tools/miniconda3/bin/python3")
+
+  if(is.null(path)){
+    path=getwd()
+  }
+  setwd(path)
+  obj_bbknn=obj
+
+  scipy=import("scipy")
+  bbknn_connection= scipy$sparse$load_npz(paste0('BBKNN_',ndim,'_connectivities.npz'))
+  rownames(bbknn_connection)=Cells(obj_bbknn); colnames(bbknn_connection)=Cells(obj_bbknn)
+  bbknn_connection = bbknn_connection %>% as.Graph(.)
+  
+  bbknn_umap=read.table(paste0('BBKNN_',ndim,'_UMAP.txt')) %>% as.matrix()
+  bbknn_leiden=read.table(paste0('BBKNN_',ndim,'_leiden.txt'))$bbknn_leiden %>% factor(.)
+  
+  obj_bbknn@reductions$umap_uncorrected = obj_bbknn@reductions$umap
+  obj_bbknn@reductions$umap_uncorrected@global=FALSE
+  obj_bbknn@reductions$umap@cell.embeddings=bbknn_umap
+  
+  obj_bbknn@meta.data[["bbknn_leiden"]]=bbknn_leiden
+  obj_bbknn@graphs$RNA_snn = bbknn_connection
+  
+  obj_bbknn = obj_bbknn %>% FindClusters(., resolution=clusterResolution)
+  
+  obj_bbknn %>% DimPlot(., label=T, group.by = "seurat_clusters") %>% print(.)
+  obj_bbknn %>% DimPlot(., label=T, group.by = "bbknn_leiden") %>% print(.)
+  return(obj_bbknn)
+}
+
+workdir="/home/dcha/02.glioblastoma_scRNAseq/scripts/bbknn/"
+#seurat_to_bbknn(subObj)
+unknown_bbknn=bbknn_to_Seurat(subObj, path=workdir, clusterResolution=3.0)
+```
+
+### Fast Annotation_HJ Kim
+```{r}
+#load("/home/dcha/02.glioblastoma_scRNAseq/rdata/obj.fastmnn_pc20.RData")
+set.seed(100)
+
+obj.sct.pca =  obj.null %>% runSeuratPCA(., ndim=50, normalization.method = "SCT")
+obj.sct.pca.reg =  obj.null %>% runSeuratPCA(., ndim=50, normalization.method = "SCT", regress=c("nCount_RNA", "percent.mt", "S.Score", "G2M.Score"))
+
+obj.logNorm.pca = obj.null %>% runSeuratPCA(., ndim=50)
+obj.logNorm.pca.reg = obj.null %>% runSeuratPCA(., ndim=50, regress=c("nCount_RNA", "percent.mt", "S.Score", "G2M.Score"))
+  
+#obj.reducedmnn_pc20_sct = obj.null %>% runSeuratPCA(., ndim=50, normalization.method = "SCT", regress=c("nCount_RNA", "percent.mt", "S.Score", "G2M.Score")) %>% reducedMNN_seurat(., nDim=20, clusterResolution = 3.0)
+obj.reducedmnn_pc20_sct = obj.null %>% runSeuratPCA(., ndim=20, normalization.method = "SCT") %>% reducedMNN_seurat(., nDim=20, clusterResolution = 3.0)
+
+obj.reducedmnn_pc20_sct$celltype = obj.reducedmnn_pc20_sct$seurat_clusters
+obj.reducedmnn_pc20_sct@meta.data =
+  obj.reducedmnn_pc20_sct@meta.data %>% 
+  mutate(celltype=case_when(
+    seurat_clusters%in%c("20", "35", "40", "41","48","59", "60", "62", "65")~"OL",
+    seurat_clusters%in%c("0","1","4","9","10","17","26", "28", "38", "47", "70")~"AC",
+    seurat_clusters%in%c("5","15","30","31","42")~"NB",
+    seurat_clusters%in%c("16","32")~"TAC",
+    seurat_clusters%in%c("63")~"Neuron",
+    seurat_clusters%in%c("57")~"Meninges",
+    seurat_clusters%in%c("22", "33", "39","56","68")~"EC",
+    seurat_clusters%in%c("6", "25", "34","37","50")~"PC",
+    seurat_clusters%in%c("24", "52")~"VSMC",
+    seurat_clusters%in%c("8", "18", "19", "36","44","45", "58", "61", "67")~"MG",
+    seurat_clusters%in%c("2", "46")~"TAM",
+    seurat_clusters%in%c("21", "29", "54","66")~"BAM",
+    seurat_clusters%in%c("69") ~ "Lymphocyte",
+    seurat_clusters%in%c("27") ~ "OPC",
+    seurat_clusters%in%c("49") ~ "COP",
+    seurat_clusters%in%c("11" ,"23" ,"64") ~ "Unknown2",
+    TRUE~ "Unknown1"
+    ))
+obj.reducedmnn_pc20_sct$celltype = obj.reducedmnn_pc20_sct$celltype %>% factor(.)
+Idents(obj.reducedmnn_pc20_sct)=obj.reducedmnn_pc20_sct$celltype
+obj.reducedmnn_pc20_sct %>% DimPlot(., label=T, cols=newAnnotCols)
+
+subObj_OPCroot=obj.reducedmnn_pc20_sct %>% subset(., subset=celltype%in%c("OPC", "COP", "Unknown1"))
+subObj_OPCroot = subObj_OPCroot %>% FindNeighbors(., reduction="reducedmnn", dims=1:20) %>% FindClusters(., resolution = 2) 
+
+
+
+obj.fastmnn_khj@active.ident = factor(x = obj.fastmnn_khj@active.ident, 
+                                   levels = c("pre-CC1", "pre-CC2", "CC1", "CC3", "CC4", "CC5", "CC6","CC7", "CC2", "AC", "TAC", "NB", "Neuron", "OPC", "COP", "OL", 
+                                              "PC", "VSMC", "EC", "MG", "BAM", "TAM", "Meninges", "Lymphocyte"))
+obj.fastmnn_khj$celltype = Idents(obj.fastmnn_khj)
+```
+
+### Fast Annotation_Unknown_remained
+```{r}
+#load("/home/dcha/02.glioblastoma_scRNAseq/rdata/obj.fastmnn_pc20.RData")
+obj.fastmnn_pc20$celltype = obj.fastmnn_pc20$seurat_clusters
+Idents(obj.fastmnn_pc20) = obj.fastmnn_pc20$celltype
+obj.fastmnn_pc20 = RenameIdents(obj.fastmnn_pc20, `0` = "OL", `1` = "Unknown1", `2` = "AC", 
+                            `3` = "AC", `4` = "NB", `5` = "Unknown1", `6` = "NB", `7` = "Unknown1", 
+                            `8` = "MG", `9` = "AC", `10` = "AC", `11` = "OL", 
+                            `12` = "AC", `13` = "EC", `14` = "OL", `15` = "BAM", 
+                            `16` = "Unknown1", `17` = "MG", `18` = "Unknown2", `19` = "EC", 
+                            `20` = "TAM", `21` = "MG", `22` = "Unknown2", `23` = "PC", 
+                            `24` = "PC", `25` = "Unknown1", `26` = "VSMC", `27` = "AC",
+                            `28` = "AC", `29` = "TAC", `30` = "PC", `31` = "MG", `32` = "NB", 
+                            `33` = "BAM", `34` = "AC", `35` = "EC", `36` = "PC", `37` = "VSMC", 
+                            `38` = "MG", `39` = "OPC", `40` = "Unknown1", `41` = "BAM", 
+                            `42` = "TAM", `43` = "AC", `44` = "MG", `45` = "TAC", 
+                            `46` = "OL", `47` = "NB", `48` = "MG", `49` = "TAM", 
+                            `50` = "Meninges", `51` = "COP", `52` = "OPC", `53` = "PC", 
+                            `54` = "Neuron", `55` = "AC", `56` = "Unknown1", `57` = "TAC",
+                            `58` = "OL", `59` = "AC", `60` = "Unknown2", `61` = "TAC", `62` = "Lymphocyte", 
+                            `63` = "PC", `64` = "NB", `65` = "OL", `66` = "AC")
+
+obj.fastmnn_pc20@active.ident = factor(x = obj.fastmnn_pc20@active.ident, 
+                                   levels = c("Unknown1", "Unknown2", "AC", "TAC", "NB", "Neuron", "OPC", "COP", "OL", 
+                                              "PC", "VSMC", "EC", "MG", "BAM", "TAM", "Lymphocyte", "Meninges"))
+obj.fastmnn_pc20$celltype = Idents(obj.fastmnn_pc20)
+```
+
+### Color mapping
+```{r}
+cancerCols=c("pre-CC1"= '#F8766D', "CC1"= '#D89000', "CC2"='#A3A500', "CC3"= '#39B600', "CC4"='#00BF7D', 
+             "CC5"='#00BFC4',  "CC6"= '#00B0F6', "pre-CC2"='#9590FF', "CC7"= '#E76BF3', "CC8"='#FF62BC')
+newCancerCols=c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1-A"='#cf9c63', "CC2"= '#de7b37', "CC1-B1"='#d1c630', 
+             "CC1-B2"='#8FAA00', "Unknown1"="#c4c4c2", "Unknown2"="#858583")
+on_cols = c("AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#07753b',"OPC"= '#85c9f2',  "COP"=  '#1095e6', "OL"='#2f3bbd', "EC"='#9b4db8', "PC"= '#e06360', "VSMC"='#f2a274', "BAM"='#f5bfd0', "MG"='#d1889f', "TAM"= '#ad4565', "Meninges"='#63110b', "Lymphocyte"="#ff3874")
+newAnnotCols=c(newCancerCols, on_cols)
+untransferCol=c(newAnnotCols, "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+off_cols = c("AC"=  '#dbdbd9', "TAC"= '#dbdbd9', "NB"=  '#dbdbd9', "Neuron"= '#dbdbd9', "OPC"= '#dbdbd9',  
+             "COP"=  '#dbdbd9', "OL"='#dbdbd9',  "EPC"= '#dbdbd9', "EC"='#dbdbd9', "PC"= '#dbdbd9', "VSMC"='#dbdbd9', 
+             "BAM"='#dbdbd9', "MG"='#dbdbd9', "TAM"= '#dbdbd9', "Meninges"='#dbdbd9',  "Lymphocyte"="#dbdbd9")
+
+
+```
+
+### Unique gene expression
+```{r}
+#obj=obj.fastmnn_pc20
+clusterName="celltype"
+chosen.hvgs=obj@assays$RNA@var.features
+
+obj@assays$RNA@counts %>% as.matrix() %>% 
+```
+
+### Marker gene expression
+```{r}
+### Naive DEG (specific Louvain cluster N to others all, Wilcoxon)
+workdir="/home/dcha/02.glioblastoma_scRNAseq/rdata/
+human_corrected/"
+
+#totalClusterDF=data.frame()
+#for (num in 0:66){
+#  perCluster=readRDS(paste0(workdir, "perCluster/cluster_", num, "_markers.wilcox.rds")) %>% tibble::rownames_to_column("gene") %>% #mutate(cluster=num)
+#  totalClusterDF=bind_rows(totalClusterDF, perCluster)
+#}
+#totalClusterDF$cluster = totalClusterDF$cluster %>% factor(.)
+
+for (type in c("gbm_fastMNN_batch", "gbm_fastMNN_patients", "gbm_fastMNN_SCT_batch","gbm_fastMNN_SCT_patients",
+               "gbm_harmony_batch", "gbm_harmony_patients", "gbm_harmony_SCT_batch","gbm_harmony_SCT_patients")){
+totalClusterDF=readRDS(paste0(workdir,"wilcoxRes.human_", type, ".rds"))
+
+topN_markers_to_write=function(markersDF, obj, topN=5, filename=NULL, filterMiscGenes=FALSE, heatmap=FALSE, species="human"){
+  require(dplyr); require(stringr); require(data.table)
+  if(filterMiscGenes){
+    if(species=="mouse"){
+    top_markers = markersDF %>% dplyr::filter(!str_detect(gene, "\\-")) %>% dplyr::filter(!str_detect(gene, "^Gm[0-9]")) %>% dplyr::filter(!str_detect(gene, "Rik$")) %>% dplyr::filter(!str_detect(gene, "^RP[l-s]")) %>% dplyr::filter(!str_detect(gene, "Fau")) %>% dplyr::filter(!str_detect(gene, "^Mrp[l-s]")) %>% dplyr::filter(!str_detect(gene, "Uba52")) %>% group_by(cluster) %>% top_n(n = topN, wt = avg_log2FC)
+    }else if(species=="human"){
+    top_markers = markersDF %>% dplyr::filter(!str_detect(gene, "\\-")) %>% dplyr::filter(!str_detect(gene, "^A[A-Z][0-9]+")) %>% dplyr::filter(!str_detect(gene, "LINC[0-9]+")) %>% dplyr::filter(!str_detect(gene, "^RP[L-S]")) %>% dplyr::filter(!str_detect(gene, "FAU")) %>% dplyr::filter(!str_detect(gene, "^MRP[L-S]")) %>% dplyr::filter(!str_detect(gene, "UBA52")) %>% group_by(cluster) %>% top_n(n = topN, wt = avg_log2FC)
+    }
+  }else{
+    top_markers = markersDF %>% group_by(cluster) %>% top_n(n = topN, wt = avg_log2FC)
+  }
+
+  if(!is.null(filename)){
+    data.table::fwrite(top_markers, file = filename, sep="\t", quote=F)
+  }
+  if(heatmap){
+    hmap=DoHeatmap(subset(obj, downsample = 200), features = unique(top_markers$gene), angle = 90, label = FALSE) +  NoLegend()
+    hmap %>% print(.)
+    return(hmap)
+  }
+  return(NULL)
+}
+
+
+topNum=30
+fn=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.txt")
+fnFilterMisc=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.filterMiscGenes.txt")
+
+
+topHeatmap=topN_markers_to_write(totalClusterDF, obj.fastmnn_pc20, topN=topNum, filterMiscGenes=FALSE, filename = fn)
+topMarkersDF=read.table(fn, sep="\t", header=T)
+topMarkers_concat=topMarkersDF %>% group_by(cluster) %>% mutate(genes_top = paste0(gene, collapse = ",")) %>% as.data.frame() %>% .[["genes_top"]] %>% unique(.) %>% as.data.frame(.) %>% setNames("genes_top") %>% mutate(cluster=seq(0,nrow(.)-1,1), .before=genes_top)
+forPanglao=topMarkers_concat %>% mutate(genes_top_panglao=str_sub(genes_top, start=1, end=100) %>% gsub(",[a-zA-Z0-9\\-]*$", "", .)) %>% select(-genes_top)
+data.table::fwrite(topMarkers_concat, file=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.genesOnly.txt"), sep="\t", quote=F)
+data.table::fwrite(forPanglao, file=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.genesOnly.panglaotxt"), sep="\t", quote=F)
+
+topHeatmap_filterMiscGenes=topN_markers_to_write(totalClusterDF, obj.fastmnn_pc20, topN=topNum, filterMiscGenes=TRUE, filename = fnFilterMisc)
+topMarkersDF_filterMiscGenes=read.table(fnFilterMisc, sep="\t", header=T)
+topMarkers_concat_filterMiscGenes=topMarkersDF_filterMiscGenes %>% group_by(cluster) %>% mutate(genes_top = paste0(gene, collapse = ",")) %>% as.data.frame() %>% .[["genes_top"]] %>% unique(.) %>% as.data.frame(.) %>% setNames("genes_top") %>% mutate(cluster=seq(0,nrow(.)-1,1), .before=genes_top)
+forPanglao_filterMiscGenes=topMarkers_concat_filterMiscGenes %>% mutate(genes_top_panglao=str_sub(genes_top, start=1, end=100) %>% gsub(",[a-zA-Z0-9\\-]*$", "", .)) %>% select(-genes_top)
+data.table::fwrite(topMarkers_concat_filterMiscGenes, file=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.filterMiscGenes.genesOnly.txt"), sep="\t", quote=F)
+data.table::fwrite(forPanglao_filterMiscGenes, file=paste0(workdir, "wilcox_", type, "_top_", topNum,"_wilcox_louvain.filterMiscGenes.genesOnly.panglaotxt"), sep="\t", quote=F)
+}
+```
+
+### unique_wilcox_DEG
+```{r}
+uniqueMarker=function(markersDF,mode="intersection", queryCluster, clusterToFilter=NULL){
+marker.filtered=markersDF %>% dplyr::filter(!str_detect(gene, "^MT")) %>% dplyr::filter(!str_detect(gene, "^AC[0-9]")) %>% dplyr::filter(!str_detect(gene, "^LINC[0-9]")) %>% dplyr::filter(!str_detect(gene, "^AL[0-9]")) %>% dplyr::filter(!str_detect(gene, "[A-Z0-9]-[A-Z]"))
+totalClusterN=marker.filtered[["cluster"]] %>% levels(.)
+marker.filtered.list=list()
+for (i in totalClusterN){
+    marker.filtered.list[[i]]=marker.filtered %>% dplyr::filter(cluster==i)
+}
+
+queryCluster=queryCluster %>% as.character()
+if(mode=="intersection"){
+  queryMarkers=marker.filtered.list[[queryCluster[1]]]
+  if(length(queryCluster)>=2){
+  for (j in queryCluster[2:length(queryCluster)]){
+    queryMarkers = queryMarkers %>% filter(gene %in% marker.filtered.list[[j]]$gene)
+    }
+  }
+}else if(mode=="union"){
+  queryMarkers=data.frame()
+  for (j in queryCluster){
+    queryMarkers=bind_rows(queryMarkers, marker.filtered.list[[j]])
+  }
+}
+
+if(is.null(clusterToFilter)){
+  clusterToFilter=totalClusterN %>% setdiff(., queryCluster)
+}
+clusterToFilter=clusterToFilter %>% setdiff(., queryCluster) %>% as.character()
+
+for (k in clusterToFilter){
+  queryMarkers = queryMarkers %>% filter(!(gene %in% marker.filtered.list[[k]]$gene))
+}
+return(queryMarkers)
+}
+uniqueMarker(clustermarkers_caseCtrl_res_2.0_wilcox, mode="union", queryCluster=c(10,12,19))
+uniqueMarker(clustermarkers_caseCtrl_res_2.0_wilcox, mode="intersection", queryCluster=c(10,12,19))
+
+uniqueMarker(clustermarkers_caseCtrl_res_2.0_wilcox, mode="union", queryCluster=c(10,12,19), clusterToFilter=c(3,15,26))
+uniqueMarker(clustermarkers_caseCtrl_res_2.0_wilcox, mode="intersection", queryCluster=c(10,12,19), clusterToFilter=c(3,15,26))
+
+#uniqueMarker(clustermarkers_caseCtrl_res_2.0_wilcox, mode="intersection", queryCluster=c(20)) %>% .$gene %>% paste(., collapse = ',')
+marker.filtered.list[["29"]] %>% .$gene %>% paste(., collapse = ',')
+
+geneName="ARL8A"
+P1=featurePlotOneGene(obj_All, geneName, "Combined")
+P2=featurePlotOneGene(obj_caseOnly, geneName, "Moghe")
+P3=featurePlotOneGene(obj_ctrlOnly, geneName, "UCSF_Ctrl")
+grid.arrange(P1, P2, P3, nrow = 1) %>% print(.)
+
+```
+
+### Moghe + UCSF Ctrl
+```{r}
+
+featurePlotOneGene=function(obj, gene, dataName){
+  require(Seurat); require(ggplot2)
+  p=FeaturePlot(object = obj, features = gene, min.cutoff = "q10", max.cutoff = "q90") + ggtitle(paste0(gene,"_",dataName)) + NoAxes() + panel_border() 
+  return(p)
+}
+
+geneName="SLC32A1"
+P1=featurePlotOneGene(obj_All, geneName, "Combined")
+P2=featurePlotOneGene(obj_caseOnly, geneName, "Moghe")
+P3=featurePlotOneGene(obj_ctrlOnly, geneName, "UCSF_Ctrl")
+grid.arrange(P1, P2, P3, nrow = 1) %>% print(.)
+```
+
+
+### cell count per cluster (krh)
+```{r}
+library(magrittr)
+md=moghe.ucsf.logNorm.cca@meta.data %>% as.data.table
+md[, .N, by = c("status", "seurat_clusters")]
+md[, .N, by = c("status", "seurat_clusters")] %>% dcast(., status ~ seurat_clusters, value.var = "N")
+
+
+```
+
+
+### Final Annotation
+```{r}
+require(ggplot2)
+`%notin%` = function(x,y) !(x %in% y)
+
+### Filtering based on cell number per cluster (>=200) and filter out mixed population (33,34)
+
+moghe.project.sct.cca = moghe.project.sct.cca %>% subset(., subset=(seurat_clusters%notin%c("32", "33","34","35","36","37","38", "39", "40")))
+moghe.project.sct.cca$cellType = moghe.project.sct.cca$seurat_clusters
+Idents(moghe.project.sct.cca)=moghe.project.sct.cca$cellType
+
+
+
+moghe.project.sct.cca = RenameIdents(moghe.project.sct.cca, `0` = "OPC", `1` = "OL", `2` = "OL", 
+                           `3` = "MG", `4` = "OL", `5` = "MG", `6` = "AC1", `7` = "ExN1", 
+                           `8` = "OL", `9` = "OL", `10` = "ExN1", `11` = "InN1", 
+                           `12` = "InN2",`13` = "InN2", `14` = "AC2", `15` = "AC1", 
+                           `16` = "ExN2", `17` = "ExN2", `18` = "OL", `19` = "ExN1", 
+                           `20` = "InN1",`21` = "InN2",  `22` = "InN3", `23` = "OL", `24` = "InN4",
+                            `25` = "OL", `26` = "ExN2", `27` = "ExN3", `28` = "OPC", `29` = "InN2", `30` = "OPC", `31` = "MG")
+
+moghe.project.sct.cca$cellType=moghe.project.sct.cca@active.ident
+
+ctOld=moghe.project.sct.cca$cellType
+ctBig=case_when((grepl("ExN[1-3]",ctOld))~"ExN",(grepl("InN[1-4]",ctOld)) ~ "InN",  
+          (grepl("AC[1-2]",ctOld)) ~ "AC",  (grepl("OPC",ctOld)) ~ "OPC",
+          ctOld=="MG" ~ "MG", ctOld=="EC" ~ "EC", ctOld=="OL" ~ "OL")
+names(ctBig)=names(ctOld)
+
+moghe.project.sct.cca$cellTypeAgg=factor(ctBig)
+
+save(moghe.project.sct.cca, file="/home/ryuny43/Moghe/02.seuratObjects/moghe.project.sct.cca.RData")
+
+### Filtering based on cell number per cluster (>=200) 
+
+#moghe.project.harmony.pc20_res1.0 = moghe.project.harmony.pc20_res1.0 %>% subset(., subset=(seurat_clusters%notin%c("25","26","27","28")))
+#moghe.project.harmony.pc20_res1.0 $cellType = moghe.project.harmony.pc20_res1.0$seurat_clusters
+#Idents(moghe.project.harmony.pc20_res1.0)=moghe.project.harmony.pc20_res1.0$cellType
+
+
+
+#moghe.project.harmony.pc20_res1.0 = RenameIdents(moghe.project.harmony.pc20_res1.0, `0` = "OL", `1` = "OPC", `2` = "OL", 
+#                           `3` = "AC1", `4` = "OL", `5` = "MG", `6` = "MG", `7` = "ExN1", 
+#                           `8` = "InN1", `9` = "ExN1", `10` = "ExN1", `11` = "InN2", 
+#                           `12` = "InN3",`13` = "ExN2", `14` = "InN4", `15` = "InN4", 
+#                           `16` = "AC2", `17` = "ExN2", `18` = "EC", `19` = "InN5", 
+#                           `20` = "OL",`21` = "OL",  `22` = "OPC", `23` = "InN3", 
+#                           `24` = "AC1")
+#moghe.project.harmony.pc20_res1.0$cellType=moghe.project.harmony.pc20_res1.0@active.ident
+
+#ctOld=moghe.project.harmony.pc20_res1.0$cellType
+#ctBig=case_when((grepl("ExN[1-2]",ctOld))~"ExN",(grepl("InN[1-5]",ctOld)) ~ "InN",  
+#          (grepl("AC[1-2]",ctOld)) ~ "AC",  (grepl("OPC",ctOld)) ~ "OPC",
+#          ctOld=="MG" ~ "MG", ctOld=="EC" ~ "EC", ctOld=="OL" ~ "OL")
+#names(ctBig)=names(ctOld)
+
+#moghe.project.harmony.pc20_res1.0$cellTypeAgg=factor(ctBig)
+
+
+
+
+
+
+
+#moghe.ucsf.harmony = moghe.ucsf.harmony %>% subset(., subset=(seurat_clusters%notin%c("13","21","26","27","28","29","30","31","32")))
+#moghe.ucsf.harmony$cellType = moghe.ucsf.harmony$seurat_clusters
+#Idents(moghe.ucsf.harmony)=moghe.ucsf.harmony$cellType
+
+
+
+
+#moghe.ucsf.harmony = RenameIdents(moghe.ucsf.harmony, `0` = "OL", `1` = "OL", `2` = "OPC1", 
+#                           `3` = "InN4", `4` = "OPC2", `5` = "OL", `6` = "AC1", `7` = "AC2", 
+#                           `8` = "ExN2", `9` = "ExN2", `10` = "ExN1", `11` = "InN1", 
+#                           `12` = "ExN1", `14` = "OL", `15` = "InN5", 
+#                           `16` = "MG", `17` = "EC", `18` = "MG", `19` = "ExN1", 
+#                           `20` = "ExN3",  `22` = "ExN3", `23` = "InN3", 
+#                           `24` = "InN2", `25` = "ExN2")
+#moghe.ucsf.harmony$cellType=moghe.ucsf.harmony@active.ident
+
+#ctOld=moghe.ucsf.harmony$cellType
+#ctBig=case_when((grepl("ExN[1-3]",ctOld))~"ExN",(grepl("InN[1-3]",ctOld)) ~ "InN-A", (grepl("InN[4-5]",ctOld)) ~ "InN-B", 
+#          (grepl("AC[1-2]",ctOld)) ~ "AC",  (grepl("OPC[1-2]",ctOld)) ~ "OPC",
+#          ctOld=="MG" ~ "MG", ctOld=="EC" ~ "EC", ctOld=="OL" ~ "OL")
+#names(ctBig)=names(ctOld)
+
+#moghe.ucsf.harmony$cellTypeAgg=factor(ctBig)
+
+#cellProp1.table=table(moghe.ucsf.harmony@meta.data$status, moghe.ucsf.harmony@meta.data$cellType)
+#cellProp2.table=table(moghe.ucsf.harmony@meta.data$status, moghe.ucsf.harmony@meta.data$cellTypeAgg)
+
+#cellProp1.table %>% as.data.frame() %>% setNames(c("status","cellType","Freq")) %>% ggplot(., aes( x=cellType, y=Freq, fill=status)) + 
+#    geom_bar(position="fill", stat="identity")
+#cellProp2.table %>% as.data.frame() %>% setNames(c("status","cellTypeAgg","Freq")) %>% ggplot(., aes( x=cellTypeAgg, y=Freq, fill=status)) + 
+#    geom_bar(position="fill", stat="identity")
+
+```
+
+## UMAP kernel density visualization
+```{r}
+require(dplyr); require(ggplot2); require(Seurat); require(MASS)
+umapMogheCCA=moghe.project.sct.cca@reductions$umap@cell.embeddings %>% as.data.frame(.)
+umapMogheCCA$status=moghe.project.sct.cca$status
+
+num_bin=500
+density_Moghe=kde2d(umapMogheCCA %>% filter(status=="Moghe") %>% .$UMAP_1, umapMogheCCA %>% filter(status=="Moghe") %>% .$UMAP_2,n=num_bin)
+
+density_Control=kde2d(umapMogheCCA %>% filter(status=="Control") %>% .$UMAP_1, umapMogheCCA %>% filter(status=="Control") %>% .$UMAP_2,n=num_bin)
+density_Control2=density_Control
+density_Control2$x=density_Moghe$x
+density_Control2$y=density_Moghe$y
+
+diff_density=density_Control2
+diff_density$z = log2(density_Moghe$z+1)-log2(density_Control2$z+1)
+
+diff_density_DF=data.frame(X=rep(NA,num_bin^2))
+
+diff_density_DF$X=rep(diff_density$x,num_bin)
+diff_density_DF$Y=rep(diff_density$y,each=num_bin)
+diff_density_DF$Z=diff_density$z %>% as.vector(.)
+diff_density_DF %>% ggplot(., aes(x=X, y=Y, fill=Z) ) + geom_point() + scale_fill_gradient2(high="red", low="blue")+theme_classic()+xlab("UMAP_1")+ylab("UMAP_2")
+# + scale_colour_gradient(low="#5cbef2", high="#ed2724", na.value="white") 
+
+
+
+```
+
+### Hierarchical clustering on CellType-TimePoint, using Pseudobulk-averaged PC on Euclidean distance, Ward.D2 linkage
+```{r}
+require(Seurat); require(ggplot2); require(dplyr)
+require(ComplexHeatmap); require(RColorBrewer)
+require(grid); require(cowplot)
+
+min_cellNum=10
+obj=obj.fastmnn_pc20
+reduction="fastmnn"
+assay="RNA"
+
+pcEmbs=obj@reductions[[reduction]]@cell.embeddings %>% as.data.frame()
+pcEmbs$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+varGeneLogNorm=ob[[assay]]@data[obj[[assay]]@var.features,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+varGeneLogNorm$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+#allLogNorm=obj[[assay]]@data %>% as.matrix() %>% t(.) %>% as.data.frame()
+#allLogNorm$cellTypeTimePoint=paste0(obj$celltype,":",obj$orig.ident)
+
+pseudoBulkCellTypesTimePoint=pcEmbs$cellTypeTimePoint %>% table(.) %>% as.data.frame(.) %>% setNames(c("cellTypeTimePoint", "Freq")) %>% filter(Freq>=min_cellNum) %>% .$cellTypeTimePoint %>% as.character(.) %>% as.data.frame(.) %>% setNames("cellTypeTimePoint") %>% mutate(cellType=(cellTypeTimePoint %>% as.character(.) %>% strsplit(":") %>% lapply(., function(x) x[[1]]) %>% as.character(.))) %>% 
+mutate(timePoint=(cellTypeTimePoint %>% as.character(.) %>% strsplit(":") %>% lapply(., function(x) x[[2]]) %>% as.character(.)))
+
+pseudoBulkCellTypesTimePoint$cellType = pseudoBulkCellTypesTimePoint$cellType %>% factor(., level=obj$celltype %>% levels(.))
+pseudoBulkCellTypesTimePoint$timePoint = pseudoBulkCellTypesTimePoint$timePoint %>% factor(., level=obj$orig.ident %>% levels(.))
+
+col_timePoint=brewer.pal(pseudoBulkCellTypesTimePoint$timePoint %>% levels(.) %>% length(.), "RdPu")
+names(col_timePoint) = pseudoBulkCellTypesTimePoint$timePoint %>% levels(.)
+col_cellType=c(on_cols, "Unknown1"= '#c4c4c2',"Unknown2"= '#858583')[pseudoBulkCellTypesTimePoint$cellType %>% levels(.)]
+col_cttp=list("CellType"=col_cellType, "TimePoint"=col_timePoint)
+
+pseudoBulkPCEmb=pcEmbs %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+
+#pseudoBulkLogNorm=allLogNorm %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+
+pseudoBulkVarLogNorm=varGeneLogNorm %>% group_by(cellTypeTimePoint) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[pseudoBulkCellTypesTimePoint$cellTypeTimePoint,]
+
+
+toMeasureDist = pseudoBulkVarLogNorm
+
+methodName="Pearson's R"
+dist_PC_MouseGBM = toMeasureDist %>% amap::Dist(., method="correlation") ### Pearson dissimilarity = 1 - PCC
+hclust_PC_MouseGBM = dist_PC_MouseGBM %>% hclust(., method = "complete")
+reorder_PC_MouseGBM = cor(as.matrix(toMeasureDist %>% t(.)), method="pearson") %>% .[hclust_PC_MouseGBM$order,hclust_PC_MouseGBM$order] ### Reordered PCC
+
+#methodName="Euclidean\ndistance"
+#dist_PC_MouseGBM = toMeasureDist %>% amap::Dist(., method="euclidean") ### Euclidean
+#hclust_PC_MouseGBM = dist_PC_MouseGBM %>% hclust(., method = "complete")
+#reorder_PC_MouseGBM = as.matrix(dist_PC_MouseGBM) %>% .[hclust_PC_MouseGBM$order,hclust_PC_MouseGBM$order]  ### Euclidean Distance
+
+hclust_PC_MouseGBM %>% plot(., hang=-1)
+
+reorder_pseudoBulkCellTypesTimePoint = pseudoBulkCellTypesTimePoint %>% tibble::column_to_rownames("cellTypeTimePoint") %>% .[hclust_PC_MouseGBM$order,]
+#pseudoBulkCounts  %>% amap::Dist(., method="correlation") %>% hclust(., method = "ward.D2") %>% plot(., hang=-1)
+#pseudoBulkCPM  %>% amap::Dist(., method="correlation") %>% hclust(., method = "ward.D2") %>% plot(., hang=-1)
+
+
+annotMouseGBM=HeatmapAnnotation(
+  CellType = reorder_pseudoBulkCellTypesTimePoint$cellType,
+  TimePoint = reorder_pseudoBulkCellTypesTimePoint$timePoint, 
+  col = col_cttp,
+  annotation_name_side ="left"
+)
+
+cheatmap_PC_MouseGBM=Heatmap(reorder_PC_MouseGBM, name = methodName, row_names_side = "left",# col=brewer.pal(5, "RdBu"),
+        top_annotation = annotMouseGBM, show_row_names = F, show_column_names = F, cluster_columns=F,cluster_rows=F)
+draw(cheatmap_PC_MouseGBM)
+par(mar=c(3,4,1,6))
+hclust_PC_MouseGBM %>% as.dendrogram(., hang=-1) %>% rev(.) %>% plot(., horiz=T, axes=FALSE)
+hclust_PC_MouseGBM %>% as.dendrogram(., hang=-1) %>% plot(., axes=FALSE, leaflab="none")
+```
+
+### Hierarchical clustering on CellType, using Pseudobulk-averaged PC on Euclidean distance, Ward.D2 linkage
+```{r}
+require(Seurat); require(ggplot2); require(dplyr)
+require(ComplexHeatmap); require(RColorBrewer)
+require(grid); require(cowplot); require(circlize)
+
+min_cellNum=10
+obj=WengTu_precc
+#cpm_obj=obj %>% NormalizeData(., normalization.method="RC")
+assay="integrated"
+
+#pcEmbs=obj@reductions$pca@cell.embeddings %>% as.data.frame()
+#pcEmbs$cellType=obj$celltype
+
+varGeneLogNorm=obj[[assay]]@data[obj[["integrated"]]@var.features,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+varGeneLogNorm$cellType=obj$celltype
+
+#allLogNorm=obj[[assay]]@data %>% as.matrix() %>% t(.) %>% as.data.frame()
+#allLogNorm$cellType=obj$celltype
+
+#varGeneCPM=cpm_obj[[assay]]data[obj[[assay]]@var.features,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+#varGeneCPM$cellType=obj$celltype
+
+#pseudoBulkPCemb=pcEmbs %>% group_by(cellType) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellType")
+#pseudoBulkLogNorm=allLogNorm %>% group_by(cellType) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellType")
+pseudoBulkVarLogNorm=varGeneLogNorm %>% group_by(cellType) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellType")
+#pseudoBulkCPM=varGeneCPM %>% group_by(cellType) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cellType")
+
+toMeasureDist=pseudoBulkVarLogNorm# %>% .[rownames(.) %>% grepl("^CC", .) %>% !., ]
+#toMeasureDist=pseudoBulkPCemb# %>% .[rownames(.) %>% grepl("^CC", .) %>% !., ]
+
+col_cellType=c(on_cols, "Unknown1"= '#c4c4c2',"Unknown2"= '#858583')[toMeasureDist %>% rownames(.)]
+col_ct=list("CellType"=col_cellType)
+
+methodName="Pearson's R"
+#methodName="Euclidean\ndistance"
+
+dist_MouseGBM = toMeasureDist %>% amap::Dist(., method="correlation") ### Pearson dissimilarity = 1 - PCC
+#dist_MouseGBM = toMeasureDist %>% amap::Dist(., method="euclidean") ### Euclidean
+
+hclust_MouseGBM = dist_MouseGBM %>% hclust(., method = "complete")
+
+reorder_MouseGBM = cor(as.matrix(toMeasureDist %>% t(.)), method="pearson") %>% .[hclust_MouseGBM$order,hclust_MouseGBM$order]  ### Reordered PCC
+#reorder_MouseGBM = as.matrix(dist_MouseGBM) %>% .[hclust_MouseGBM$order,hclust_MouseGBM$order]  ### Euclidean Distance
+
+
+annotMouseGBM=HeatmapAnnotation(
+  CellType = reorder_MouseGBM %>% rownames(.),
+  #col = col_ct,
+  annotation_name_side ="left"
+)
+
+#col_fun = colorRamp2(c(0, 40, 80), c("#262aff", "#477eff", "white"))
+cheatmap_MouseGBM=Heatmap(reorder_MouseGBM, name = methodName, row_names_side = "left",
+        top_annotation = annotMouseGBM, show_row_names = F, show_column_names = F, cluster_columns=F,cluster_rows=F)
+draw(cheatmap_MouseGBM)
+
+par(mar=c(3,4,1,6))
+hclust_MouseGBM %>% as.dendrogram(., hang=-1) %>% rev(.) %>% plot(., horiz=T, axes=FALSE)
+hclust_MouseGBM %>% as.dendrogram(., hang=-1) %>% plot(., axes=FALSE, leaflab="none")
+
+```
+
+### PC-influencing genes + Manual feature plots
+```{r}
+require(Seurat); require(ggplot2); require(dplyr); require(tibble); require(gridExtra); require(cowplot)
+
+#moghe.harmony.cellCycleReg.pc15 %>% VizDimLoadings(., dim=1:4, reduction="harmony")
+#moghe.harmony.cellCycleReg.pc15 %>% DimHeatmap(., dims = 1:6, cells = 500, balanced = TRUE, reduction="harmony")
+
+#harmonyN=4
+#harm=moghe.harmony.cellCycleReg.pc15@reductions$harmony@feature.loadings %>% .[,harmonyN]
+#harm_abs=abs(harm)
+#harm_influence=bind_cols(names(harm), harm, harm_abs) %>% as.data.frame() %>% setNames(c("gene",paste0("harmony",harmonyN), "harmony_abs")) %>% arrange(desc(harmony_abs)) %>% tibble::column_to_rownames("gene")
+
+#moghe.harmony.cellCycleReg.pc15 %>% VizDimLoadings(., dim=1:4, reduction="harmony")
+#moghe.harmony.cellCycleReg.pc15 %>% DimHeatmap(., dims = 1:6, cells = 500, balanced = TRUE, reduction="harmony")
+
+obj_All=moghe.caseCtrl.harmony.cellCycleReg.pc15.res_2.0
+obj_caseOnly=moghe.caseCtrl.harmony.cellCycleReg.pc15.res_2.0 %>% subset(., subset=orig.ident=="Moghe_Sample219" | orig.ident=="Moghe_Sample340")
+obj_ctrlOnly=moghe.caseCtrl.harmony.cellCycleReg.pc15.res_2.0 %>% subset(., subset=orig.ident=="krieg.5976.pfc" | orig.ident=="krieg.5408.pfc" | orig.ident=="krieg.6032.pfc")
+
+featurePlotAll=function(obj, gene_list){
+  require(Seurat); require(ggplot2)
+  p=FeaturePlot(object = obj, features = gene_list, ncol=length(gene_list), min.cutoff = "q10", max.cutoff = "q90") + NoLegend() + NoAxes()
+  return(p)
+seuratObjects
+}
+featurePlotOneGene=function(obj, gene, dataName){
+  require(Seurat); require(ggplot2)
+  p=FeaturePlot(object = obj, features = gene, min.cutoff = "q10", max.cutoff = "q90") + ggtitle(paste0(gene,"_",dataName)) + NoAxes() + panel_border() 
+  return(p)}
+
+#geneList=c("SLCO1C1", "GJA1", "SLC7A11")
+#featurePlotAll(obj_All, geneList)
+
+### MOGHE vs UCSF Ctrl
+geneName="NTM"
+P1=featurePlotOneGene(obj_All, geneName, "Combined")
+P2=featurePlotOneGene(obj_caseOnly, geneName, "Moghe")
+P3=featurePlotOneGene(obj_ctrlOnly, geneName, "UCSF_Ctrl")
+grid.arrange(P1, P2, P3, nrow = 1) %>% print(.)
+
+
+#obj %>% DimPlot(., reduction="umap")
+
+#clustermarkers = FindAllMarkers(object = moghe.harmony.cellCycleReg.pc15, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+# Additional ploting methods
+plots = FeaturePlot(pbmc_small, features = c('MS4A1', 'LYZ'), combine = FALSE)
+plots[[3]] + NoLegend()  # Get just the co-expression plot, built-in legend is meaningless for this plot
+plots[[4]] # Get just the key
+CombinePlots(plots[3:4], legend = 'none') # Stitch the co-expression and key plots together
+
+```
+
+
+### scRNAseq Case-Ctrl DEG using MAST
+```{r}
+#!/usr/bin/Rscript
+#load("/home/ryuny43/Moghe/02.seuratObjects/moghe.ucsf.harmony.RData")
+require(dplyr)
+
+runMAST_DGE_caseCtrl=function(obj, cellTypeColName="cellType", cellTypeGiven, filterThreshold=0.1, downsampling=TRUE){
+  require(MAST); require(Seurat); require(dplyr); require(lme4)
+  set.seed(100)
+  obj@meta.data[[cellTypeColName]] = obj@meta.data[[cellTypeColName]] %>% factor(.)
+  obj = obj %>% subset(., cells=row.names(.[[cellTypeColName]])[.[[cellTypeColName]]==cellTypeGiven])
+  obj@meta.data[[cellTypeColName]] = obj@meta.data[[cellTypeColName]] %>% droplevels(.)
+
+  if(downsampling){
+    minCellCount=obj$status %>% table(.) %>% as.numeric(.) %>% min(.)
+    caseCells=obj %>% subset(., status=="Moghe") %>% .@meta.data %>% rownames(.) %>% sample(.,size=minCellCount, replace=FALSE)
+    ctrlCells=obj %>% subset(., status=="Control") %>% .@meta.data %>% rownames(.) %>% sample(.,size=minCellCount, replace=FALSE)
+    obj=obj %>% subset(., cells=c(caseCells, ctrlCells))
+  }
+  
+  obj.sca=obj %>% as.SingleCellExperiment %>% SceToSingleCellAssay(.)
+  colData(obj.sca)$cngeneson = scale(colSums(assay(obj.sca)>0))
+  
+  obj.sca = filterLowExpressedGenes(obj.sca, threshold=filterThreshold)
+  zlmCond = zlm(formula = as.formula("~status+cngeneson+(1|subjects)+age+sex+region+percent.ribo"), sca=obj.sca,
+                method="glmer", ebayes=FALSE, strictConvergence=FALSE, fitArgsD = list(nAGQ = 0))
+  #zlmCond = zlm(formula = as.formula("~status+cngeneson+age+sex+region+percent.ribo"), sca=obj.sca)
+  
+  summaryCond = summary(zlmCond, doLRT="statusMoghe")
+  summaryDt = summaryCond$datatable
+  dt1 = summaryDt[contrast=="statusMoghe" & component=="H", .(primerid, `Pr(>Chisq)`)]
+  dt2 = summaryDt[contrast=="statusMoghe" & component=="logFC", .(primerid, coef, ci.hi, ci.lo)]
+  de_res = merge(dt1, dt2, by="primerid")
+  colnames(de_res) = c("gene", "statusMoghe.H_p", "statusMoghe.logFC", 'statusMoghe.logFC_ci.hi', 'statusMoghe.logFC_ci.lo')
+  de_res$statusMoghe.H_fdr = p.adjust(de_res$statusMoghe.H_p, "fdr")
+  de_res=de_res %>% na.omit(.)
+  if(downsampling){
+    save(obj, file=paste0("/home/ryuny43/Moghe/03.mastDGE/objects/",cellTypeGiven,".downsampled.MAST_subset.RData"))
+  }else{
+    save(obj, file=paste0("/home/ryuny43/Moghe/03.mastDGE/objects/",cellTypeGiven,".MAST_subset.RData"))
+  }
+  return(de_res)
+}
+
+ct="OPC"
+threshold=0.01
+
+mastRes=runMAST_DGE_caseCtrl(testObj , cellTypeColName="cellType", cellTypeGiven=ct, filterThreshold = threshold, downsampling=TRUE) %>% arrange(statusMoghe.H_fdr)
+#write.table(mastRes, paste0("/home/ryuny43/Moghe/03.mastDGE/results/",ct,".threshold_",threshold,".mastRes.txt"), row.names = F, quote=F)
+
+#cellTypesToDGE=moghe.ucsf.annot$cellType %>% levels(.) 
+#for (ct in cellTypesToDGE){
+#  mastRes=runMAST_DGE_caseCtrl(moghe.ucsf.annot, cellTypeGiven=ct, filterThreshold = 0.01) %>% arrange(status.H_fdr)
+#  write.table(mastRes, paste0("/home/ryuny43/Moghe/03.mastDGE/results/mastRes_",ct,"txt"), row.names = F, quote=F)
+#}
+```
+
+### MAST results
+```{r}
+order.table.write=function(fn){
+  require(data.table)
+  setwd("/home/dcha/glioblastoma/mast/results")
+  orderedPath="/home/dcha/glioblastoma/mast/ordered_results/"
+
+  read.table(fn, header=T, row.names=1) %>% arrange(timeOrder.H_fdr) %>% fwrite(.,file=paste0(orderedPath, fn), sep="\t", row.names=T)
+}
+
+genes2filter=function(df, species="human"){
+  require(dplyr)
+  genes=rownames(df)
+  if (species=="human"){
+      filtered.genes = genes %>% .[!grepl('^RP[L-S]',.)] %>% .[!grepl('^MRP[L-S]',.)] %>% .[!grepl("FAU",.)] %>% .[!grepl("UBA52",.)] %>% .[!grepl('^MT-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("[A-Z0-9]-[A-Z]",.)] 
+  } else if (species=="mouse"){
+  filtered.genes = genes %>% .[!grepl('^Rp[l-s]',.)] %>% .[!grepl('^Mrp[s-l]',.)] %>% .[!grepl("Fau",.)] %>% .[!grepl("Uba52",.)]  %>% .[!grepl('^mt-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("^Gm[0-9]",.)] %>% .[!grepl("Rik$",.)] %>% .[!grepl("^H[0-9]-",.)]} %>% .[!grepl("[A-Z0-9]-[A-Z]",.)] 
+  return(df[filtered.genes,])
+}
+
+order.table.write("mastRes_immuneCells_400.txt")
+order.table.write("mastRes_oligCells_400.txt")
+order.table.write("mastRes_NSC_oligCells_400.txt")
+order.table.write("mastRes_totalCells_400.txt")
+order.table.write("mastRes_neuralCells_400.txt")
+order.table.write("mastRes_precursorCells_400.txt")
+order.table.write("mastRes_immuneCells.txt")
+order.table.write("mastRes_precursorCells.txt")
+order.table.write("mastRes_oligCells.txt")
+order.table.write("mastRes_NSC_oligCells.txt")
+
+setwd("/home/dcha/glioblastoma/mast/ordered_results")
+
+mastRes_immuneCells_400 = read.table("mastRes_immuneCells_400.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_oligCells_400 = read.table("mastRes_oligCells_400.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_NSC_oligCells_400 = read.table("mastRes_NSC_oligCells_400.txt", header=T, row.names=1)%>% genes2filter(.)
+ 
+mastRes_totalCells_400 = read.table("mastRes_totalCells_400.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_neuralCells_400 = read.table("mastRes_neuralCells_400.txt", header=T, row.names=1)  %>% genes2filter(.)
+
+mastRes_precursorCells_400 = read.table("mastRes_precursorCells_400.txt", header=T, row.names=1)%>% genes2filter(.)
+
+mastRes_immuneCells = read.table("mastRes_immuneCells.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_precursorCells = read.table("mastRes_precursorCells.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_oligCells = read.table("mastRes_oligCells.txt", header=T, row.names=1) %>% genes2filter(.)
+
+mastRes_NSC_oligCells = read.table("mastRes_NSC_oligCells.txt", header=T, row.names=1) %>% genes2filter(.)
+```
+
+
+### calculating CPM-based LFC
+```{r}
+require(EnhancedVolcano) #
+
+genes2filter=function(df, species="human"){
+  require(dplyr)
+  genes=rownames(df)
+  if (species=="human"){
+      filtered.genes = genes %>% .[!grepl('^RP[L-S]',.)] %>% .[!grepl('^MRP[L-S]',.)] %>% .[!grepl("FAU",.)] %>% .[!grepl("UBA52",.)] %>% .[!grepl('^MT-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("^LINC",.)] 
+  } else if (species=="mouse"){
+  filtered.genes = genes %>% .[!grepl('^Rp[l-s]',.)] %>% .[!grepl('^Mrp[s-l]',.)] %>% .[!grepl("Fau",.)] %>% .[!grepl("Uba52",.)]  %>% .[!grepl('^mt-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("^Gm[0-9]",.)] %>% .[!grepl("Rik$",.)] %>% .[!grepl("^H[0-9]-",.)]}
+  return(df[filtered.genes,])
+}
+
+
+setwd("/home/ryuny43/Moghe/03.mastDGE_sctcca/results")
+#toPlot=moghe.project.sct.cca
+#toPlotDownSampled=downsampled.ctagg.moghe.project.sct.cca
+
+#for (ct in c('OL','MG','AC1','ExN1','InN1','InN2', 'AC2', 'ExN2', 'InN3', 'InN4' ,'ExN3')){
+for (ct in c("AC", "ExN", "InN")) {
+#fn=paste0(ct,".geneFilterThreshold_0.1.mastRes.txt")
+fn_downSampled=paste0(ct,".geneFilterThreshold_0.1.downsampled.mastRes.txt")
+finalFn=paste0(ct,".geneFilterThreshold_0.1.downsampled.mastRes.cpmLFC.txt")
+
+mast_res_ds=read.table(fn_downSampled, header=T, row.names=1)
+fc_add_mast=mast_res_ds %>% mutate(statusMoghe.logFC_cpm=0)
+
+for (gene2logFC in fc_add_mast %>% row.names()) {
+gene_CPM=bind_cols(cpm.downsampled.ct.moghe.project.sct.cca@assays$RNA@data[gene2logFC,] %>% as.data.frame(), cpm.downsampled.ct.moghe.project.sct.cca$status) %>% setNames(c("CPM","status"))
+meanCPM=gene_CPM %>% group_by(status) %>% dplyr::summarise(MeanCounts=mean(CPM))
+
+CPM_fc=(meanCPM %>% as.data.frame() %>% filter(status=="Moghe") %>% .["MeanCounts"] %>% as.numeric())/(meanCPM %>% as.data.frame() %>% filter(status=="Control") %>% .["MeanCounts"] %>% as.numeric())
+fc_add_mast[gene2logFC,"statusMoghe.logFC_cpm"]=log2(CPM_fc)
+}
+fc_add_mast %>% data.table::fwrite(.,file=paste0("/home/ryuny43/Moghe/03.mastDGE_sctcca/results/", finalFn), sep="\t", row.names=T)
+print(paste0(ct, " done"))
+}
+#frame %>% t(.) %>% reshape2::melt(., id.vars=colnames(.)) %>% mutate(log2Value=log2(value)) %>% setNames(c("gene", "methods", "FC", "log2FC")) %>% ggplot(., aes(x=gene, y=FC, colour=methods, group=methods))+geom_point()+geom_line()+coord_flip()
+```
+
+### Combining all double LFC-validated DEG results across all cell types
+```{r}
+setwd("/home/ryuny43/Moghe/03.mastDGE_sctcca/results")
+require(ggplot2); require(ggrepel)
+pcg2filter=function(df, species="human"){
+  require(dplyr); require(tibble)
+  geneBiotype=read.table("/home/public/ref/metaTexts/gencode.human.cellRanger.biotype.txt", sep="\t", header=T) 
+  pcg=geneBiotype %>% filter(biotype=="protein_coding") %>% select(gene)
+  genes=rownames(df)
+  filtered.genes=intersect(rownames(df), pcg$gene)
+  return(df[filtered.genes,])
+}
+
+geneBiotype=read.table("/home/public/ref/metaTexts/gencode.human.cellRanger.biotype.txt", sep="\t", header=T)
+deg_allCells=data.frame()
+
+for (ct in c('OPC', 'OL','MG','AC1','ExN1','InN1','InN2', 'AC2', 'ExN2', 'InN3', 'InN4' ,'ExN3')){
+  finalFn=paste0(ct,".geneFilterThreshold_0.1.downsampled.mastRes.cpmLFC.txt")
+  doubleLFC=read.table(finalFn, header=T, row.names=1)
+  doubleLFC = doubleLFC %>% select(c(statusMoghe.logFC, statusMoghe.logFC_cpm, statusMoghe.H_fdr)) %>% setNames(c("Log2FC", "Log2FC_CPM", "Q")) %>% mutate("minuslog10Q"=-log10(Q)) %>% tibble::rownames_to_column("gene") %>% merge(., geneBiotype, by.x="gene") %>% mutate(cellType=ct)
+
+  FDR_cutoff=0.1     
+  minuslogFDR_cutoff=-log10(FDR_cutoff)
+  foldChange_cutoff=1.25
+  logFoldChange_cutoff=log2(foldChange_cutoff) 
+  
+  doubleLFC = doubleLFC %>% mutate(., colorGroup=case_when(Q<=FDR_cutoff & abs(Log2FC)>=logFoldChange_cutoff & abs(Log2FC_CPM)>=logFoldChange_cutoff & Log2FC*Log2FC_CPM>0~"FDR+LogFC(MAST)+LogFC(CPM)",
+           Q<=FDR_cutoff & abs(Log2FC)>=logFoldChange_cutoff ~"FDR+LogFC(MAST)",
+           Q<=FDR_cutoff~"FDR only",TRUE~"NS")) %>%
+    mutate(., label_plus=case_when(colorGroup=="FDR+LogFC(MAST)+LogFC(CPM)" & Log2FC>0 ~gene)) %>% 
+    mutate(., label_minus=case_when(colorGroup=="FDR+LogFC(MAST)+LogFC(CPM)" & Log2FC<0 ~gene))
+  deg_allCells=bind_rows(deg_allCells, doubleLFC)
+}
+
+xLim=doubleLFC[["Log2FC"]] %>% max(.) +0.2
+yLim=15
+
+
+print(paste0("FDR<",FDR_cutoff))
+print(paste0("|FC|>",foldChange_cutoff))
+
+deg_allCells = deg_allCells %>% filter(biotype %in% c("protein_coding", "lncRNA"))
+
+deg_filtered_allCells=deg_allCells %>% filter(colorGroup=="FDR+LogFC(MAST)+LogFC(CPM)")
+
+deg_filtered_allCells_noMG=deg_filtered_allCells %>% filter(cellType!="MG")
+
+table(deg_filtered_allCells$biotype)
+table(deg_filtered_allCells$biotype, deg_filtered_allCells$cellType) 
+table(deg_allCells$biotype, deg_allCells$cellType) 
+
+table(deg_filtered_allCells$biotype, deg_filtered_allCells$cellType) %>% as.data.frame(.) %>% setNames(c("biotype","cellType","Freq")) %>%  ggplot(., aes( x=cellType, y=Freq, fill=biotype)) + 
+    geom_bar(stat="identity", position="dodge")+theme_bw()
+
+table(deg_allCells$biotype, deg_allCells$cellType) %>% as.data.frame(.) %>% setNames(c("biotype","cellType","Freq")) %>%  ggplot(., aes( x=cellType, y=Freq, fill=biotype)) + 
+    geom_bar(stat="identity", position="dodge")+theme_bw()
+
+```
+
+### MG GO plotting
+```{r}
+require(gprofiler2)
+
+MG_up=mgCaseCtrlMAST_DESeq2 %>% filter(biotype=="protein_coding") %>% filter(Log2FC>0) %>% .$gene #%>% paste(., collapse=" ")
+MG_down=mgCaseCtrlMAST_DESeq2 %>% filter(biotype=="protein_coding") %>% filter(Log2FC<0) %>% .$gene #%>% paste(., collapse=" ")
+MG_All=mgCaseCtrlMAST_DESeq2 %>% filter(biotype=="protein_coding") %>% .$gene #%>% paste(., collapse=" ")
+
+#MG_up_goRes = gost(query = MG_up, organism = "hsapiens", significant = FALSE)
+#MG_down_goRes = gost(query = MG_down, organism = "hsapiens", significant = FALSE)
+#MG_All_goRes=gost(query=MG_All, organism = "hsapiens", significant = FALSE )
+
+sourceToWatch=c("GO:BP", "GO:CC", "GO:MF", "KEGG", "WP", "REAC")
+FDR_cutoff=0.1
+topN=15
+
+goMG_up=MG_up_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="up")
+goMG_down=MG_down_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="down")
+goMG_All=MG_All_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="All")
+
+top10_goBP_MG_All = goMG_All %>% .[1:topN,] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+#all_corr_goBP_MG_up = goMG_up %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+#all_corr_goBP_MG_down = goMG_down %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+
+#merger_updown_goBP_MG = bind_rows(top10_goBP_MG_All, all_corr_goBP_MG_up, all_corr_goBP_MG_down) %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+
+top10_goBP_MG_All$ontology=factor(top10_goBP_MG_All$ontology, level=unique(rev(top10_goBP_MG_All$ontology)))
+#merger_updown_goBP_MG$direction = factor(merger_updown_goBP_MG$direction, level=c("down", "up", "All"))
+top10_goBP_MG_All %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.3)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+#merger_updown_goBP_MG %>% filter(direction!="All") %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")
+
+upConstraint=goMG_up %>% filter(p_value<1) %>% nrow(.)
+top10_up= goMG_up %>% .[1:min(topN, upConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_up$ontology=factor(top10_up$ontology, level=unique(rev(top10_up$ontology)))
+top10_up %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+downConstraint=goMG_down %>% filter(p_value<1) %>% nrow(.)
+top10_down= goMG_down %>% .[1:min(topN, downConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_down$ontology=factor(top10_down$ontology, level=unique(rev(top10_down$ontology)))
+top10_down %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+```
+
+### Non-MG GO plotting
+```{r}
+require(gprofiler2)
+
+noMG_down=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% filter(Log2FC<0) %>% .$gene #%>% paste(., collapse=" ")
+noMG_up=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% filter(Log2FC>0) %>% .$gene #%>% paste(., collapse=" ")
+noMG_All=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% .$gene #%>% paste(., collapse=" ")
+
+
+noMG_up_goRes = gost(query = noMG_up, organism = "hsapiens", significant = FALSE)
+noMG_down_goRes = gost(query = noMG_down, organism = "hsapiens", significant = FALSE)
+noMG_All_goRes=gost(query=noMG_All, organism = "hsapiens", significant = FALSE )
+
+sourceToWatch=c("GO:BP", "GO:CC", "GO:MF", "KEGG", "WP", "REAC")
+FDR_cutoff=0.1
+topN=10
+
+goMG_up=noMG_up_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="up")
+goMG_down=noMG_down_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="down")
+goMG_All=noMG_All_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="All")
+
+top10_goBP_MG_All = goMG_All %>% .[1:topN,] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+#all_corr_goBP_MG_up = goMG_up %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+#all_corr_goBP_MG_down = goMG_down %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+
+#merger_updown_goBP_MG = bind_rows(top10_goBP_MG_All, all_corr_goBP_MG_up, all_corr_goBP_MG_down) %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+
+top10_goBP_MG_All$ontology=factor(top10_goBP_MG_All$ontology, level=unique(rev(top10_goBP_MG_All$ontology)))
+#merger_updown_goBP_MG$direction = factor(merger_updown_goBP_MG$direction, level=c("down", "up", "All"))
+top10_goBP_MG_All %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.3)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+#merger_updown_goBP_MG %>% filter(direction!="All") %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")
+
+upConstraint=goMG_up %>% filter(p_value<1) %>% nrow(.)
+top10_up= goMG_up %>% .[1:min(topN, upConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_up$ontology=factor(top10_up$ontology, level=rev(top10_up$ontology))
+top10_up %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+downConstraint=goMG_down %>% filter(p_value<1) %>% nrow(.)
+top10_down= goMG_down %>% .[1:min(topN, downConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_down$ontology=factor(top10_down$ontology, level=rev(top10_down$ontology))
+top10_down %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+```
+
+
+### Cell-type GO plotting
+```{r}
+require(gprofiler2)
+
+celltypeQuery="InN3"
+
+doubleLFC_DEG_volcanoPlot(deg_allCells %>% filter(cellType==celltypeQuery) %>% filter(biotype=="protein_coding"), celltypeQuery)
+
+cellDEG_down=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% filter(cellType==celltypeQuery) %>% filter(Log2FC<0) %>% .$gene
+cellDEG_up=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% filter(cellType==celltypeQuery)  %>% filter(Log2FC>0) %>% .$gene
+cellDEG_All=deg_filtered_allCells_noMG %>% filter(biotype=="protein_coding") %>% filter(cellType==celltypeQuery)  %>% .$gene
+
+
+cellDEG_up_goRes = gost(query = cellDEG_up, organism = "hsapiens", significant = FALSE)
+cellDEG_down_goRes = gost(query = cellDEG_down, organism = "hsapiens", significant = FALSE)
+cellDEG_All_goRes=gost(query=cellDEG_All, organism = "hsapiens", significant = FALSE )
+
+sourceToWatch=c("GO:BP", "GO:CC", "GO:MF", "KEGG", "WP", "REAC")
+FDR_cutoff=0.1
+topN=5
+goMG_up=cellDEG_up_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="up")
+goMG_down=cellDEG_down_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="down")
+goMG_All=cellDEG_All_goRes$result %>% filter(source %in% sourceToWatch) %>% arrange(p_value) %>% select(p_value, source, term_name) %>% mutate(direction="All")
+
+top10_goBP_MG_All = goMG_All %>% .[1:topN,] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+#all_corr_goBP_MG_up = goMG_up %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+#all_corr_goBP_MG_down = goMG_down %>% filter(!duplicated(term_name)) %>% tibble::column_to_rownames("term_name") %>% .[top10_goBP_MG_All$term_name,]  %>% tibble::rownames_to_column("term_name")
+
+#merger_updown_goBP_MG = bind_rows(top10_goBP_MG_All, all_corr_goBP_MG_up, all_corr_goBP_MG_down) %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+
+top10_goBP_MG_All$ontology=factor(top10_goBP_MG_All$ontology, level=unique(rev(top10_goBP_MG_All$ontology)))
+#merger_updown_goBP_MG$direction = factor(merger_updown_goBP_MG$direction, level=c("down", "up", "All"))
+top10_goBP_MG_All %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.3)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+#merger_updown_goBP_MG %>% filter(direction!="All") %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")
+
+upConstraint=goMG_up %>% filter(p_value<1) %>% nrow(.)
+top10_up= goMG_up %>% .[1:min(topN, upConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_up$ontology=factor(top10_up$ontology, level=unique(rev(top10_up$ontology)))
+top10_up %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+
+downConstraint=goMG_down %>% filter(p_value<1) %>% nrow(.)
+top10_down= goMG_down %>% .[1:min(topN, downConstraint),] %>% mutate(minusLog10Q=-log10(p_value)) %>% mutate(ontology=paste0(term_name," (",source,")"))
+top10_down$ontology=factor(top10_down$ontology, level=unique(rev(top10_down$ontology)))
+top10_down %>% ggplot(., aes(x=ontology, y=minusLog10Q, fill=direction))+geom_bar(stat="identity", position="dodge", colour="black", width=0.5)+theme_classic()+coord_flip()+scale_fill_manual(values=c("All"="#1ac731", "up"="#c7140e", "down"="#00a5c2")) + xlab("") +ylab("-log10(Q)")+geom_hline(yintercept = -log10(FDR_cutoff), colour="#990000", linetype="dashed")
+```
+
+
+### Hypergeometric testing on Glyco-gene sets
+```{r}
+require(dplyr); require(ggplot2)
+
+setwd("/home/ryuny43/Moghe")
+
+cellTypes=deg_filtered_allCells$cellType %>% unique(.)
+pcgGencodeAll=read.table("/home/ryuny43/Moghe/totalCellrangerHuman.genes.txt", sep="\t", header=T)
+glycoGenes=read.table("/home/ryuny43/Moghe/glyco-genes.txt", sep="\t", header=T)
+epigadGenes=read.table("/home/ryuny43/Moghe/epigad.genes.txt", sep="\t", header=T)
+
+glycoEnrich=data.frame()
+for (ct in cellTypes){
+  if (ct!="MG"){
+    cellDEG=deg_filtered_allCells %>% filter(cellType==ct) %>% filter(biotype=="protein_coding")
+  }else{
+    cellDEG=mgCaseCtrlMAST_DESeq2
+  }
+  #cellDEG=deg_allCells %>% filter(Q<=0.1) %>% filter(abs(Log2FC)>=log2(1.25)) %>% filter(cellType==ct)  %>% filter(biotype=="protein_coding")
+  overlapGenes=intersect(cellDEG$gene,glycoGenes$gene)
+  overlapNum=overlapGenes %>% length(.)
+  list1=cellDEG$gene %>% length(.)
+  PopSize=pcgGencodeAll$gene %>% length(.)
+  list2=glycoGenes$gene %>% length(.)
+  rawP=phyper(overlapNum-1,list1,PopSize-list1,list2,lower.tail = FALSE, log.p = FALSE)
+  glycoEnrich=bind_rows(glycoEnrich, c("cellType"=ct, "p_value"=as.numeric(rawP), "overlapGenes"=overlapGenes %>% paste(., collapse=","), "overlapNum"=overlapNum, "DEGnum"=list1))
+}
+glycoEnrich = glycoEnrich %>% mutate(minusLog10P=-log10(as.numeric(p_value))) %>% arrange(desc(minusLog10P))
+
+glycoEnrich$cellType=factor(glycoEnrich$cellType, level=glycoEnrich$cellType %>% rev(.))
+
+glycoEnrich %>% 
+ggplot(., aes(x=cellType, y=minusLog10P, label=overlapGenes))+geom_bar(stat="identity", position="dodge", colour="black", fill= "#e0c5ed", width=0.5)+theme_classic() + xlab("") +ylab("-log10(P)")+ geom_hline(yintercept = -log10(0.05), colour="#990000", linetype="dashed")+coord_flip()+ylim(c(0,3))#+geom_text_repel(nudge_y=0.1, nudge_x = 0.3, size=3)
+
+epilepsyEnrich=data.frame()
+for (ct in cellTypes){
+  if (ct!="MG"){
+    cellDEG=deg_filtered_allCells %>% filter(cellType==ct) %>% filter(biotype=="protein_coding")
+  }else{
+    cellDEG=mgCaseCtrlMAST_DESeq2
+  }
+  #cellDEG=deg_allCells %>% filter(Q<=0.1) %>% filter(abs(Log2FC)>=log2(1.25)) %>% filter(cellType==ct)  %>% filter(biotype=="protein_coding")
+  overlapGenes=intersect(cellDEG$gene,epigadGenes$gene)
+  overlapNum=overlapGenes %>% length(.)
+  list1=cellDEG$gene %>% length(.)
+  PopSize=pcgGencodeAll$gene %>% length(.)
+  list2=epigadGenes$gene %>% length(.)
+  rawP=phyper(overlapNum-1,list1,PopSize-list1,list2,lower.tail = FALSE, log.p = FALSE)
+  epilepsyEnrich=bind_rows(epilepsyEnrich, c("cellType"=ct, "p_value"=as.numeric(rawP), "overlapGenes"=overlapGenes %>% paste(., collapse=","), "overlapNum"=overlapNum, "DEGnum"=list1))
+}
+epilepsyEnrich = epilepsyEnrich %>% mutate(minusLog10P=-log10(as.numeric(p_value))) %>% arrange(desc(minusLog10P))
+
+epilepsyEnrich$cellType=factor(epilepsyEnrich$cellType, level=epilepsyEnrich$cellType %>% rev(.))
+
+epilepsyEnrich %>% 
+ggplot(., aes(x=cellType, y=minusLog10P, label=overlapGenes))+geom_bar(stat="identity", position="dodge", colour="black", fill= "#6091fc", width=0.5)+theme_classic() + xlab("") +ylab("-log10(P)")+ geom_hline(yintercept = -log10(0.05), colour="#990000", linetype="dashed")+coord_flip()+ylim(c(0,3))#+geom_text_repel(nudge_y=0.1, nudge_x = 0.3, size=3)
+
+
+## MG enrichment
+microgliaEnrich=data.frame()
+for (path in c("cytokine_production", "immune_response", "inflammatory_response", "microglia_pathogen_phagocytosis_pathway", "myeloid_leukocyte_activation", "neuroinflammatory_response", "Phagocytosis")){
+  cellDEG=mgCaseCtrlMAST_DESeq2
+  genesCustom=read.table(paste0(path,".txt"), sep="\t", header=T)
+  overlapGenes=intersect(cellDEG$gene,genesCustom$gene)
+  overlapNum=overlapGenes %>% length(.)
+  list1=cellDEG$gene %>% length(.)
+  PopSize=pcgGencodeAll$gene %>% length(.)
+  list2=epigadGenes$gene %>% length(.)
+  rawP=phyper(overlapNum-1,list1,PopSize-list1,list2,lower.tail = FALSE, log.p = FALSE)
+  microgliaEnrich=bind_rows(microgliaEnrich, c("Pathway"=path, "p_value"=as.numeric(rawP), "overlapGenes"=overlapGenes %>% paste(., collapse=","), "overlapNum"=overlapNum, "DEGnum"=list1))
+}
+microgliaEnrich$q_value=p.adjust(microgliaEnrich$p_value)
+
+microgliaEnrich = microgliaEnrich %>% mutate(minusLog10Q=-log10(as.numeric(q_value))) %>% arrange(desc(minusLog10Q))
+
+microgliaEnrich$Pathway=factor(microgliaEnrich$Pathway, level=microgliaEnrich$Pathway %>% rev(.))
+
+microgliaEnrich %>% 
+ggplot(., aes(x=Pathway, y=minusLog10Q, label=overlapGenes))+geom_bar(stat="identity", position="dodge", colour="black", fill= "#1ac731", width=0.5)+theme_classic() + xlab("") +ylab("-log10(Q)")+ geom_hline(yintercept = -log10(0.1), colour="#990000", linetype="dashed")+coord_flip()+ylim(c(0,6))
+
+
+```
+
+### Seurat-to-Monocle3 preprocessing (OL-OPC)
+```{r}
+require(monocle3); require(ggplot2); require(dplyr); require(rgl)
+cellTypes2Include=c("OPC", "COP", "pre-CC1","CC1","CC3","CC4")
+maxDim=20
+umapDim=3
+
+seurat = obj.final %>% subset(., subset=celltype%in%cellTypes2Include) %>% runSeuratPCA(obj, ndim=maxDim, species="mouse", cellCycleRegress = FALSE)
+seurat = seurat %>% subset(., subset=celltype%in%cellTypes2Include) %>% wrapperRunHarmony(., anchorFeature = "orig.ident", ndim=maxDim, species="mouse", cellCycleRegress = FALSE)
+seurat = seurat %>% RunUMAP(., reduction="harmony", dims=1:maxDim, n.components=umapDim)
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+plotcol=my_cols[seurat$celltype %>% as.character()]
+plot3d(seurat@reductions$umap@cell.embeddings, col=plotcol)
+```
+
+### Monocle 3 trajectory inference on OPC-OL with transfered UMAP and clusters from Seurat
+```{r}
+seurat_to_cellDataSet=function(obj, pcaExist=FALSE){
+  require(monocle3); require(Seurat); require(dplyr)
+  #assayToUse=DefaultAssay(obj)
+  assayToUse="RNA"
+  
+  # part one, gene annotations
+  if(pcaExist){
+    hvg=rownames(obj@reductions[["pca"]]@feature.loadings)
+  }else{
+    hvg=obj[[assayToUse]]@var.features
+  }
+  gene_annotation = as.data.frame(hvg, row.names = hvg)
+  colnames(gene_annotation) = "gene_short_name"
+  
+  # part two, cell information
+  cell_metadata = as.data.frame(obj[[assayToUse]]@counts@Dimnames[[2]], row.names = obj[[assayToUse]]@counts@Dimnames[[2]])
+  colnames(cell_metadata) = "barcode"
+  cell_metadata = bind_cols(cell_metadata, obj@meta.data)
+  
+  # part three, counts sparse matrix
+  New_matrix = obj[[assayToUse]]@counts
+  New_matrix = New_matrix[hvg, ]
+  expression_matrix = New_matrix
+  
+  ### Construct the basic cds object
+  
+  cds = new_cell_data_set(expression_matrix,
+                                       cell_metadata = cell_metadata,
+                                       gene_metadata = gene_annotation)
+  return(cds)
+}
+
+seuratUMAP_Monocle3=function(obj, clusterInfo=NULL, chooseCells=TRUE, toPlot=c("cluster"), loopClose=TRUE){
+  require(monocle3); require(Seurat); require(dplyr)
+  assayToUse=DefaultAssay(obj)
+  cds_seuratUMAP=seurat_to_cellDataSet(obj, pcaExist=TRUE)
+  
+  ### Construct and assign the made-up identical partition 
+  
+  recreate.partition = c(rep(1, length(cds_seuratUMAP@colData@rownames)))
+  names(recreate.partition) = cds_seuratUMAP@colData@rownames
+  recreate.partition = as.factor(recreate.partition)
+  
+  cds_seuratUMAP@clusters@listData[["UMAP"]][["partitions"]] = recreate.partition
+  
+  ### Assign the cluster info
+  if(is.null(clusterInfo)){
+    list_cluster=Idents(obj)
+  }else{
+    list_cluster = obj@meta.data[[clusterInfo]]
+  }
+  names(list_cluster) = obj[[assayToUse]]@data@Dimnames[[2]]
+  
+  cds_seuratUMAP@clusters@listData[["UMAP"]][["clusters"]] = list_cluster
+  cds_seuratUMAP@clusters@listData[["UMAP"]][["louvain_res"]] = "NA"
+  cds_seuratUMAP@int_colData@listData[["reducedDims"]][["UMAP"]] =obj@reductions[["umap"]]@cell.embeddings
+  
+  
+  ### Assign feature loading for downstream module analysis
+  
+  cds_seuratUMAP@preprocess_aux$gene_loadings = obj@reductions[["pca"]]@feature.loadings
+  
+  if(chooseCells){
+    cds_seuratUMAP = cds_seuratUMAP %>% choose_cells(.)
+  }
+  cds_seuratUMAP = learn_graph(cds_seuratUMAP, use_partition = FALSE, close_loop = loopClose)
+
+  plot_monocle3(cds_seuratUMAP, toPlot)
+
+  cds_seuratUMAP = order_cells(cds_seuratUMAP)
+  plot_cells(cds_seuratUMAP, 
+              color_cells_by = "pseudotime",
+              label_groups_by_cluster=FALSE,
+              label_leaves=FALSE,
+              label_branch_points=FALSE, group_label_size = 4) %>% print(.)
+  return(cds_seuratUMAP)
+}
+
+de_novo_monocle3=function(obj, batch=NULL, ndim=50, toPlot=c("cluster"), loopClose=TRUE, partitionUse=TRUE, clusterResolution=NULL){
+  cds_monocleDN=seurat_to_cellDataSet(obj)
+
+  cds_monocleDN = preprocess_cds(cds_monocleDN, num_dim =ndim)
+  
+  if(!is.null(batch)){
+      cds_monocleDN = align_cds(cds_monocleDN, alignment_group = batch) ### Batch-corrected by Batchelor::reducedMNN, Haghverdi (2018)
+  }
+  cds_monocleDN = cds_monocleDN %>% reduce_dimension(.)
+  if(!is.null(clusterResolution)){
+    cds_monocleDN = cds_monocleDN %>% cluster_cells(., resolution = clusterResolution)
+  }else{
+    cds_monocleDN = cds_monocleDN %>% cluster_cells(.)
+  }
+
+  cds_monocleDN = learn_graph(cds_monocleDN, close_loop=loopClose, use_partition=partitionUse)
+  
+  plot_monocle3(cds_monocleDN, toPlot)
+  
+  cds_monocleDN = order_cells(cds_monocleDN)
+  plot_cells(cds_monocleDN, 
+              color_cells_by = "pseudotime",
+              label_groups_by_cluster=FALSE,
+              label_leaves=FALSE,
+              label_branch_points=FALSE, group_label_size = 4) %>% print(.)
+  return(cds_monocleDN)
+}
+
+plot_monocle3=function(cds, toPlot=c("cluster")){
+  for (p in toPlot){
+    plot_cells(cds, 
+                  color_cells_by = p,
+                  label_cell_groups=FALSE,
+                  label_groups_by_cluster=FALSE,
+                  label_leaves=FALSE,
+                  label_branch_points=FALSE, group_label_size = 4) %>% print(.)
+  }
+}
+
+#lineage_precc2_cc2_monocle3=obj.final %>% subset(., subset=celltype%in%c("pre-CC2", "CC2")) %>% seuratUMAP_Monocle3(.)
+
+
+#dnLinPreCC1 = obj.final %>% subset(., subset=celltype%in%c("OPC","pre-CC1")) %>% de_novo_monocle3(.)
+#dnLinA = obj.final %>% subset(., subset=celltype%in%c("OPC","pre-CC1", "CC1")) %>% de_novo_monocle3(.)
+#dnLinB = obj.final %>% subset(., subset=celltype%in%c("OPC","pre-CC1", "CC3", "CC4")) %>% de_novo_monocle3(.)
+
+
+
+#dnLinA=de_novo_monocle3(obj.final, c("OPC", "pre-CC1", "CC1"))
+#dnLinB=de_novo_monocle3(obj.final, c("OPC", "pre-CC1", "CC3", "CC4"))
+
+#dnLinPreCC1 = obj.final %>% .[,Cells(.)%in%colnames(lineage_OPC_wj precc1_monocle3)] %>% de_novo_monocle3(.)
+#dnLinA = obj.final %>% .[,Cells(.)%in%colnames(lineageA_monocle3)] %>% de_novo_monocle3(.)
+#dnLinB = obj.final %>% .[,Cells(.)%in%colnames(lineageB_monocle3)] %>% de_novo_monocle3(.)
+
+
+
+#seurat=obj.final %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC1"))
+
+#dnLinPreCC1 %>% plot_cells(.,color_cells_by = 'pseudotime',
+#                label_groups_by_cluster=FALSE,label_leaves=FALSE,
+#                label_branch_points=FALSE, group_label_size = 4)
+#dnLinPreCC1 %>% plot_cells(.,color_cells_by = 'celltype',
+#                label_groups_by_cluster=FALSE,label_leaves=FALSE,
+#                label_branch_points=FALSE, group_label_size = 4)
+```
+
+
+### OPC-rooted cells Monocle3 DN
+```{r}
+subObj_OPCroot=obj.reducedmnn_pc20_sct %>% subset(., subset=celltype%in%c("OPC", "Unknown1"))
+#subObj_OPCroot2 = obj.reducedmnn_pc20_sct %>% subset(., subset=celltype2 %in% c("OPC", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2"))
+#subObj_OPCroot3 = obj.fastmnn_finalAnnot %>% subset(., subset=celltype2 %in% c("OPC", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2"))
+#subObj_OPCroot=obj.sct %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2"))
+#subObj_OPCroot2=obj.fastmnn_finalAnnot.umap3d %>% subset(., subset=celltype2%in%c("OPC", "OPC_tumor", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2"))
+#cds_subObj_OPCroot2=de_novo_monocle3(subObj_OPCroot2, batch="batch", ndim=20, toPlot=c("celltype2", "orig.ident", "cluster"))
+#cds_subObj_OPCroot3=de_novo_monocle3(subObj_OPCroot3, batch="batch", ndim=20, toPlot=c("celltype2", "orig.ident", "cluster"))
+
+cds_subObj_OPCroot=de_novo_monocle3(subObj_OPCroot, batch="batch", ndim=20, toPlot=c("celltype", "orig.ident", "cluster"))
+
+#plot_monocle3(cds_subObj_OPCroot, toPlot=c("orig.ident", "cluster", "pseudotime", "celltype"))
+#sling_subObj_OPCroot = cds_subObj_OPCroot %>% mc3_slingshot(., start_clus = "OPC", colPalette=newAnnotCols)
+```
+
+
+### Unknown2 Monocle3 DN
+```{r}
+obj.fastmnn_newAnnot=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/obj.fastmnn_newAnnot.rds")
+precc2_cc2_seurat=obj.fastmnn_newAnnot %>% subset(., subset=celltype%in%c("pre-CC2", "CC2"))
+cds_subObj_precc2_cc2_res1=precc2_cc2_seurat %>% de_novo_monocle3(., batch = "batch", ndim=20, clusterResolution = 1e-3, toPlot = c("orig.ident", "cluster"), loopClose = F)
+
+
+cds_subObj_precc2_cc2_res1 %>% plot_monocle3(., toPlot=c("orig.ident", "cluster", "pseudotime"))
+```
+
+### Monocle3-derived annotation (Unknown 1)
+```{r}
+obj_pivot=obj.fastmnn_khj
+obj.fastmnn_newAnnot = obj_pivot
+
+obj.fastmnn_newAnnot$celltype_unsolved = obj.fastmnn_newAnnot$celltype %>% as.character(.)
+cds_subObj_OPCroot@colData$celltype_unsolved = cds_subObj_OPCroot@colData$celltype %>% as.character()
+
+obj.fastmnn_newAnnot$celltype = NULL
+cds_subObj_OPCroot@colData$celltype = NULL
+
+opcRootClus=cds_subObj_OPCroot@clusters$UMAP$clusters %>% as.data.frame(.) %>% setNames("mc3_cluster")
+opcRootCells=rownames(opcRootClus)
+opcRootClus$seurat_celltype= obj_pivot@meta.data %>% select(celltype) %>% .[opcRootCells,]
+opcRootClus = opcRootClus %>% tibble::rownames_to_column("barcodes")
+opcRootClus = opcRootClus %>% mutate(mc3_celltype=case_when(mc3_cluster==2 & seurat_celltype=="OPC" ~ "OPC",
+                                                        mc3_cluster==2 & seurat_celltype!="OPC" ~ "pre-CC1",
+                                                        mc3_cluster==3 ~ "CC1-A",
+                                                        mc3_cluster==1 ~ "CC1-B1",
+                                                        mc3_cluster%in%c(4,5) ~ "CC1-B2",
+                                                        ))
+
+cds_subObj_OPCroot@colData$celltype = opcRootClus$mc3_celltype %>% factor(., levels=(c("OPC", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2")))
+obj.fastmnn_newAnnot@meta.data = obj.fastmnn_newAnnot@meta.data %>% tibble::rownames_to_column("barcodes") %>% 
+  merge(x=., y=(opcRootClus %>% select(c(barcodes, mc3_celltype))), by.x="barcodes", all.x=TRUE) %>%
+  mutate(celltype=case_when(!is.na(mc3_celltype)~mc3_celltype,
+                            TRUE~celltype_unsolved)) %>% 
+  select(-c(mc3_celltype)) %>%
+  tibble::column_to_rownames("barcodes") %>% .[Cells(obj_pivot),]
+Idents(obj.fastmnn_newAnnot) = obj.fastmnn_newAnnot$celltype %>% factor(.)
+```
+
+
+### Monocle3-derived annotation (Unknown 2)
+```{r}
+cds_subObj_precc2_cc2_res1=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/cds_subObj_precc2_cc2_res1.rds")
+#obj.fastmnn_newAnnot = obj_pivot
+originalCells=Cells(obj.fastmnn_newAnnot)
+obj.fastmnn_newAnnot$celltype_unsolved = obj.fastmnn_newAnnot$celltype %>% as.character(.)
+cds_subObj_precc2_cc2_res1@colData$celltype_unsolved = cds_subObj_precc2_cc2_res1@colData$celltype %>% as.character()
+
+obj.fastmnn_newAnnot$celltype = NULL
+cds_subObj_precc2_cc2_res1@colData$celltype = NULL
+
+uk2Clus=cds_subObj_precc2_cc2_res1@clusters$UMAP$clusters %>% as.data.frame(.) %>% setNames("mc3_cluster")
+uk2Cells=rownames(uk2Clus)
+uk2Clus$seurat_celltype= obj.fastmnn_newAnnot@meta.data %>% select(celltype) %>% .[uk2Cells,]
+uk2Clus = uk2Clus %>% tibble::rownames_to_column("barcodes")
+uk2Clus = uk2Clus %>% mutate(mc3_celltype=case_when(mc3_cluster%in%c(1,3) ~ "pre-CC2",
+                                                        mc3_cluster%in%c(2,4,5) ~ "CC2"))
+
+cds_subObj_precc2_cc2_res1@colData$celltype = uk2Clus$mc3_celltype %>% factor(., levels=(c("pre-CC2", "CC2")))
+obj.fastmnn_newAnnot@meta.data = obj.fastmnn_newAnnot@meta.data %>% tibble::rownames_to_column("barcodes") %>% 
+  merge(x=., y=(uk2Clus %>% select(c(barcodes, mc3_celltype))), by.x="barcodes", all.x=TRUE) %>%
+  mutate(celltype=case_when(!is.na(mc3_celltype)~mc3_celltype,
+                            TRUE~celltype_unsolved)) %>% 
+  select(-c(mc3_celltype)) %>%
+  tibble::column_to_rownames("barcodes") %>% .[originalCells,]
+Idents(obj.fastmnn_newAnnot) = obj.fastmnn_newAnnot$celltype %>% factor(.)
+obj.fastmnn_finalAnnot=obj.fastmnn_newAnnot
+```
+
+
+### MG/Macrophage/TAM clusters
+```{r}
+subObj_MG = obj.fastmnn_pc20 %>% subset(.,subset=celltype=="MG")
+subObj_MG = subObj_MG %>% fastMNN_seurat(., nDim=20, clusterResolution = 0.7)
+subObj_MG_wilcox = subObj_MG %>% FindAllMarkers(., only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+#cds_subObj_immune_res3=seuratUMAP_Monocle3(subObj_immune_res3, toPlot=c("cluster", "orig.ident"))
+```
+
+### MG_annot
+```{r}
+subObj_MG=RenameIdents(subObj_MG, `0` = "MG-Act", `1` = "MG-Hom", `2` = "MG-Hom", 
+                            `3` = "MG-Pro", `4` = "MG-Act", `5` = "MG-Uns", `6` = "MG-Pro", `7` = "MG-Uns", 
+                            `8` = "MG-Act", `9` = "MG-Pro", `10` = "MG-Hom", `11` = "MG-Hom")
+subObj_MG$celltype = Idents(subObj_MG)
+```
+
+### Parse for cpdb
+```{r}
+obj_immune_cancer=obj.fastmnn_finalAnnot %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "pre-CC2", "CC1-A", "CC1-B1", "CC1-B2", "CC2","MG", "TAM", "BAM"))
+mgSubCells=names(subObj_MG$celltype)
+mgSubCelltypes=subObj_MG$celltype %>% as.character(.)
+names(mgSubCelltypes)=mgSubCells
+
+mg_renamed_celltypes=c(obj.fastmnn_finalAnnot$celltype %>% .[.!="MG"], mgSubCelltypes) %>% .[Cells(obj_immune_cancer)]
+obj_immune_cancer$celltype = mg_renamed_celltypes
+Idents(obj_immune_cancer) = obj_immune_cancer$celltype
+
+cpdb_gc_logNorm  = obj_immune_cancer@assays$RNA@data[obj_immune_cancer@assays$RNA@var.features,] %>% as.matrix(.) %>% as.data.frame(.)
+cpdb_meta=obj_immune_cancer@meta.data %>% select(celltype)
+
+cpdb_gc_logNorm %>% fwrite(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/immune/cpdb_logMatrix.txt", quote=F, sep="\t", row.names=TRUE)
+cpdb_meta %>% fwrite(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/immune/cpdb_meta.txt", quote=F, sep="\t", row.names=TRUE)
+
+```
+
+###
+```{r}
+workdir="/home/dcha/02.glioblastoma_scRNAseq/rdata/immune/"
+topNum=30
+fn=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.txt")
+fnFilterMisc=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.filterMiscGenes.txt")
+
+topN_markers_to_write=function(markersDF, obj, topN=5, filename=NULL, filterMiscGenes=FALSE, heatmap=FALSE){
+  require(dplyr); require(stringr); require(data.table)
+  if(filterMiscGenes){
+    top_markers = markersDF %>% dplyr::filter(!str_detect(gene, "\\-")) %>% dplyr::filter(!str_detect(gene, "^Gm[0-9]")) %>% dplyr::filter(!str_detect(gene, "Rik$")) %>% dplyr::filter(!str_detect(gene, "^Rp[l-s]")) %>% dplyr::filter(!str_detect(gene, "Fau")) %>% dplyr::filter(!str_detect(gene, "^Mrp[l-s]")) %>% dplyr::filter(!str_detect(gene, "Uba52")) %>% group_by(cluster) %>% top_n(n = topN, wt = avg_log2FC)
+  }else{
+    top_markers = markersDF %>% group_by(cluster) %>% top_n(n = topN, wt = avg_log2FC)
+  }
+
+  if(!is.null(filename)){
+    data.table::fwrite(top_markers, file = filename, sep="\t", quote=F)
+  }
+  if(heatmap){
+    hmap=DoHeatmap(subset(obj, downsample = 200), features = unique(top_markers$gene), angle = 90, label = FALSE) +  NoLegend()
+    hmap %>% print(.)
+    return(hmap)
+  }
+  return(NULL)
+}
+
+topHeatmap=topN_markers_to_write(subObj_MG_wilcox, obj.fastmnn_pc20, topN=topNum, filterMiscGenes=FALSE, filename = fn)
+topMarkersDF=read.table(fn, sep="\t", header=T)
+topMarkers_concat=topMarkersDF %>% group_by(cluster) %>% mutate(genes_top = paste0(gene, collapse = ",")) %>% as.data.frame() %>% .[["genes_top"]] %>% unique(.) %>% as.data.frame(.) %>% setNames("genes_top") %>% mutate(cluster=seq(0,nrow(.)-1,1), .before=genes_top)
+forPanglao=topMarkers_concat %>% mutate(genes_top_panglao=str_sub(genes_top, start=1, end=100) %>% gsub(",[a-zA-Z0-9\\-]*$", "", .)) %>% select(-genes_top)
+data.table::fwrite(topMarkers_concat, file=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.genesOnly.txt"), sep="\t", quote=F)
+data.table::fwrite(forPanglao, file=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.genesOnly.panglao.txt"), sep="\t", quote=F)
+
+topHeatmap_filterMiscGenes=topN_markers_to_write(subObj_MG_wilcox, obj.fastmnn_pc20, topN=topNum, filterMiscGenes=TRUE, filename = fnFilterMisc)
+topMarkersDF_filterMiscGenes=read.table(fnFilterMisc, sep="\t", header=T)
+topMarkers_concat_filterMiscGenes=topMarkersDF_filterMiscGenes %>% group_by(cluster) %>% mutate(genes_top = paste0(gene, collapse = ",")) %>% as.data.frame() %>% .[["genes_top"]] %>% unique(.) %>% as.data.frame(.) %>% setNames("genes_top") %>% mutate(cluster=seq(0,nrow(.)-1,1), .before=genes_top)
+forPanglao_filterMiscGenes=topMarkers_concat_filterMiscGenes %>% mutate(genes_top_panglao=str_sub(genes_top, start=1, end=100) %>% gsub(",[a-zA-Z0-9\\-]*$", "", .)) %>% select(-genes_top)
+data.table::fwrite(topMarkers_concat_filterMiscGenes, file=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.filterMiscGenes.genesOnly.txt"), sep="\t", quote=F)
+data.table::fwrite(forPanglao_filterMiscGenes, file=paste0(workdir, "fastMNN_pc20_top", topNum,"_wilcox_louvain.filterMiscGenes.genesOnly.panglao.txt"), sep="\t", quote=F)
+```
+
+
+```{r}
+cds_for_MNN@int_colData@listData[["reducedDims"]][["PCA"]] =seurat@reductions[["pca"]]@cell.embeddings
+#cds_for_MNN = align_cds(cds_for_MNN, alignment_group = "batch")
+#batchelorPCs=cds_for_MNN@int_colData$reducedDims$Aligned
+```
+### Seurat Preprocessing
+```{r}
+require(rgl)
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+olig_precc1_OL=obj.final %>% subset(., subset=celltype%in%c("OL","OPC","COP", "pre-CC1", "CC1", "CC3", "CC4"))
+obj.final.3D=obj.final %>% Seurat::RunUMAP(.,dims=1:50, n.components="3")
+plotcol=my_cols[seurat$celltype %>% as.character()]
+
+UMAP_1=seurat@reductions$umap@cell.embeddings[,1]
+UMAP_2=seurat@reductions$umap@cell.embeddings[,2]
+UMAP_3=seurat@reductions$umap@cell.embeddings[,3]
+plot3d(obj.final.3D@reductions$umap@cell.embeddings, col=my_cols, aspect="iso")
+plot3d.SlingshotDataSet(SlingshotDataSet(sce),type="lineages", lwd = 3, add=TRUE, col="black")
+```
+
+### Seurat/monocle3-to-slingshot
+```{r}
+options(rgl.printRglwidget = TRUE)
+
+seurat_slingshot=function(obj, cluster="celltype", colPalette=NULL, start_clus=NULL, de_novo=FALSE, seurat_norm=TRUE, reduction="UMAP", pcaName="pca", drawCurve=FALSE, npcs=2){
+  require(Seurat); require(dplyr); require(slingshot); require(uwot); require(SingleCellExperiment); require(irlba)
+  seurat=obj
+  assayToUse=DefaultAssay(seurat)
+  seuratCount=seurat[[assayToUse]]@counts[seurat[[assayToUse]]@var.features,]
+  if(seurat_norm){
+    seuratNorm=seurat[[assayToUse]]@data[seurat[[assayToUse]]@var.features,]
+    sce= SingleCellExperiment(assays=list(counts=seuratCount, norm=seuratNorm), colData=seurat@meta.data)
+  }else{
+    sce= SingleCellExperiment(assays=list(counts=seuratCount), colData=seurat@meta.data)
+    assays(sce)$norm = log1p(FQnorm(assays(sce)$counts))
+  }
+  
+  if(de_novo){
+    assays(sce)$norm = log1p(FQnorm(assays(sce)$counts))
+    if(reduction=="PCA"){
+      rd_pca = prcomp_irlba(t(assays(sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd_pca)= colnames(sce)
+      reducedDims(sce) = SimpleList(PCA = rd_pca)
+    }else if(reduction=="UMAP"){
+      rd_umap = uwot::umap(t(assays(sce)$norm))
+      reducedDims(sce) = SimpleList(UMAP=rd_umap)
+    }else if(reduction=="both"){
+      rd_pca = prcomp_irlba(t(assays(sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd_pca)= colnames(sce)
+      rd_umap = uwot::umap(t(assays(sce)$norm))
+      reducedDims(sce) = SimpleList(PCA = rd_pca, UMAP=rd_umap)
+      reduction="UMAP"
+    }
+    sce = sce %>% slingshot(., clusterLabels = cluster, reducedDim = reduction, start.clus=start_clus) 
+  }else{
+    reducedDims(sce) = SimpleList(PCA = seurat@reductions[[pcaName]]@cell.embeddings,
+                                  UMAP = seurat@reductions[["umap"]]@cell.embeddings)
+    if(reduction=="both"){
+      reduction="UMAP"
+    }
+    sce = sce %>% slingshot(., clusterLabels = cluster, reducedDim = reduction, start.clus=start_clus) 
+  }
+
+  plotSlingshot(sce, colorBy=cluster, colPalette=colPalette, reduction=reduction, drawCurve=drawCurve)
+  return(sce)
+}
+
+
+
+mc3_slingshot=function(cds, cluster="celltype", colPalette=NULL, start_clus=NULL, de_novo=FALSE, reduction="UMAP", pcaName="Aligned", drawCurve=FALSE, npcs=2){
+  require(monocle3); require(dplyr); require(slingshot); require(uwot); require(SingleCellExperiment); require(irlba)
+  cdsCount=cds@assays@data$counts
+  sce= SingleCellExperiment(list(counts=cdsCount), colData=cds@colData)
+  if(de_novo){
+    assays(sce)$norm = log1p(FQnorm(assays(sce)$counts))
+    if(reduction=="PCA"){
+      rd_pca = prcomp_irlba(t(assays(sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd_pca)= colnames(sce)
+      reducedDims(sce) = SimpleList(PCA = rd_pca)
+    }else if(reduction=="UMAP"){
+      rd_umap = uwot::umap(t(assays(sce)$norm))
+      reducedDims(sce) = SimpleList(UMAP=rd_umap)
+    }else if(reduction=="both"){
+      rd_pca = prcomp_irlba(t(assays(sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd_pca)= colnames(sce)
+      rd_umap = uwot::umap(t(assays(sce)$norm))
+      reducedDims(sce) = SimpleList(PCA = rd_pca, UMAP=rd_umap)
+      reduction="UMAP"
+    }
+    sce = sce %>% slingshot(., clusterLabels = cluster, reducedDim = reduction, start.clus=start_clus) 
+  }else{
+    reducedDims(sce) = SimpleList(PCA = cds@int_colData$reducedDims[[pcaName]],
+                                  UMAP=cds@int_colData$reducedDims[["UMAP"]])
+    if(reduction=="both"){
+      reduction="UMAP"
+    }
+    sce = sce %>% slingshot(., clusterLabels = cluster, reducedDim = reduction, start.clus=start_clus) 
+  }
+
+  plotSlingshot(sce, colorBy=cluster, colPalette=colPalette, reduction=reduction, drawCurve=drawCurve)
+  return(sce)
+}
+
+FQnorm = function(counts){
+    require(SingleCellExperiment)
+    rk = apply(counts,2,rank,ties.method='min')
+    counts.sort = apply(counts,2,sort)
+    refdist = apply(counts.sort,1,median)
+    norm = apply(rk,2,function(r){ refdist[r] })
+    rownames(norm) = rownames(counts)
+    return(norm)
+}
+
+plotSlingshot=function(sce, colorBy="celltype", colPalette=NULL, reduction="PCA", drawCurve=FALSE){
+  require(slingshot); require(dplyr); require(SingleCellExperiment)
+  sds=SlingshotDataSet(sce)
+  if(is.null(colPalette)){
+    plotcol=sce[["celltype"]]
+  }else{
+    plotcol=colPalette[sce[["celltype"]]%>% as.character()]
+
+  }
+  if(length(names(reducedDims(sce)))==1){
+    reduction=names(reducedDims(sce))
+  }
+  plot(reducedDims(sce)[[reduction]], col = plotcol, pch=16, asp = 1, cex=0.3) %>% print(.)
+  lines(sds, lwd=1, type="lineages", col='black') %>% print(.)  
+  if(drawCurve){lines(sds, lwd=1, lty=2, type="curves", col='blue') %>% print(.) }
+}
+
+#precc2_cc2_obj = finAnnot %>% subset(., subset=celltype %in% c("pre-CC2", "CC2"))
+#precc2_cc2_sce = seurat_slingshot(precc2_cc2_obj, start_clus="pre-CC2", de_novo=FALSE, npcs=20, colPalette = newAnnotCols, seurat_norm=FALSE)
+
+#opcRoot_lba = seurat_slingshot(finAnnot %>% subset(., subset=celltype %in% c("OPC","pre-CC1","CC1-A","CC1-B1","CC1-B2")), start_clus="OPC", de_novo=TRUE, npcs=2, colPalette = newAnnotCols, seurat_norm=FALSE, reduction="PCA")
+
+opcRoot_lba_pc2 = mc3_slingshot(cds_subObj_OPCroot_tuned, start_clus="OPC", de_novo=TRUE, npcs=2, colPalette = newAnnotCols, reduction="PCA", drawCurve = TRUE)
+opcRoot_lba_pc20 = mc3_slingshot(cds_subObj_OPCroot_tuned, start_clus="OPC", de_novo=TRUE, npcs=20, colPalette = newAnnotCols, reduction="PCA", drawCurve = TRUE)
+opcRoot_nonTuned_lba_pc2 = mc3_slingshot(cds_subObj_OPCroot, start_clus="OPC", de_novo=TRUE, npcs=2, colPalette = newAnnotCols, reduction="PCA", drawCurve = TRUE)
+opcRoot_nonTuned_lba_pc20 = mc3_slingshot(cds_subObj_OPCroot, start_clus="OPC", de_novo=TRUE, npcs=20, colPalette = newAnnotCols, reduction="PCA", drawCurve = TRUE)
+
+sds=SlingshotDataSet(opcRoot_nonTuned_lba_pc20)
+sds@lineages
+```
+
+```{r}
+linA_obj=obj.fastmnn_finalAnnot %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC1-A")) %>% subset(., subset=orig.ident!="Control")
+linB_obj=obj.fastmnn_finalAnnot %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC1-B1", "CC1-B2")) %>% subset(., subset=orig.ident!="Control") 
+
+linA_obj$timePoint=linA_obj$orig.ident %>% droplevels(.) %>% as.numeric(.)
+linB_obj$timePoint=linB_obj$orig.ident %>% droplevels(.) %>% as.numeric(.)
+
+saveRDS(linA_obj, "/home/dcha/02.glioblastoma_scRNAseq/rdata/mast_data/linA_obj.rds")
+saveRDS(linB_obj, "/home/dcha/02.glioblastoma_scRNAseq/rdata/mast_data/linB_obj.rds")
+
+
+```
+### MAST on time within lineages
+```{r}
+#!/usr/bin/Rscript
+require(dplyr)
+
+#obj.final_noControl=obj.final %>% subset(., subset=orig.ident!="Control")
+#obj.final_noControl$orig.ident = obj.final_noControl$orig.ident %>% droplevels(.)
+#obj.final_noControl$timePoint=obj.final_noControl$orig.ident %>% as.numeric(.)
+
+#linA_obj_mast=obj.final_noControl %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC1"))
+#linB_obj_mast=obj.final_noControl %>% subset(., subset=celltype%in%c("OPC", "pre-CC1", "CC3", "CC4"))
+
+
+runMAST_time=function(file_name, obj, filterThreshold=0.1, downsampling=TRUE){
+  require(MAST); require(Seurat); require(dplyr); require(lme4)
+  set.seed(100)
+  assayToUse=DefaultAssay(obj)
+  if(downsampling){
+    cells_downsampled=c()
+    minCellCount=obj@meta.data[["timePoint"]] %>% table(.) %>% as.numeric(.) %>% min(.)
+    for (i in obj@meta.data[["timePoint"]] %>% unique(.)){
+      cells_downsampled=c(cells_downsampled, obj %>% subset(., subset=timePoint==i) %>% .@meta.data %>% rownames(.) %>% sample(.,size=minCellCount, replace=FALSE))}
+    obj=obj %>% subset(., cells=cells_downsampled)
+  }
+  obj.data=obj[[assayToUse]]@data
+  
+  obj.sce= SingleCellExperiment(list(logNorm=obj.data),
+                                   colData=obj@meta.data)
+  obj.sca=obj.sce %>% SceToSingleCellAssay(.)
+  colData(obj.sca)$cngeneson = scale(colSums(assay(obj.sca)>0))
+  
+  obj.sca = filterLowExpressedGenes(obj.sca, threshold=filterThreshold)
+  zlmCond = zlm(formula = as.formula("~timePoint+cngeneson+(1|batch)+celltype+percent.mt+percent.ribo+S.Score+G2M.Score"), sca=obj.sca,
+                method="glmer", ebayes=FALSE, strictConvergence=FALSE, fitArgsD = list(nAGQ = 0))
+
+  summaryCond = summary(zlmCond, doLRT="timePoint")
+  summaryDt = summaryCond$datatable
+  dt1 = summaryDt[contrast=="timePoint" & component=="H", .(primerid, `Pr(>Chisq)`)]
+  dt2 = summaryDt[contrast=="timePoint" & component=="logFC", .(primerid, coef, ci.hi, ci.lo)]
+  de_res = merge(dt1, dt2, by="primerid")
+  colnames(de_res) = c("gene", "timePoint.H_p", "timePoint.logFC", 'timePoint.logFC_ci.hi', 'timePoint.logFC_ci.lo')
+  de_res$timePoint.H_fdr = p.adjust(de_res$timePoint.H_p, "fdr")
+  de_res=de_res %>% na.omit(.)
+  if(downsampling){
+    saveRDS(obj, file=gsub(".rds", ".downsampled.MAST.obj.rds", fullFn))}
+  return(de_res)
+}
+
+
+#args=commandArgs(trailingOnly = TRUE)
+#file_name=args[1]
+
+#path="/home/dcha/02.glioblastoma_scRNAseq/rdata/mast_data/"
+fullFn="/home/dcha/02.glioblastoma_scRNAseq/rdata/mast_data/linA_obj.rds"
+obj=linA_obj_mast
+
+mastRes=runMAST_time(fullFn, obj, downsampling=TRUE) %>% arrange(timePoint.H_fdr)
+write.table(mastRes, gsub(".rds", ".mastRes_downsample.txt", fullFn), row.names = F, quote=F)
+
+```
+
+
+### calculating CPM-based LFC
+```{r}
+require(EnhancedVolcano) #
+
+genes2filter=function(df, species="human"){
+  require(dplyr)
+  genes=rownames(df)
+  if (species=="human"){
+      filtered.genes = genes %>% .[!grepl('^RP[L-S]',.)] %>% .[!grepl('^MRP[L-S]',.)] %>% .[!grepl("FAU",.)] %>% .[!grepl("UBA52",.)] %>% .[!grepl('^MT-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("^LINC",.)] 
+  } else if (species=="mouse"){
+  filtered.genes = genes %>% .[!grepl('^Rp[l-s]',.)] %>% .[!grepl('^Mrp[s-l]',.)] %>% .[!grepl("Fau",.)] %>% .[!grepl("Uba52",.)]  %>% .[!grepl('^mt-',.)] %>% .[!grepl("^A[A-Z][0-9]",.)] %>% .[!grepl("^Gm[0-9]",.)] %>% .[!grepl("Rik$",.)] %>% .[!grepl("^H[0-9]-",.)]}
+  return(df[filtered.genes,])
+}
+
+
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/mast_data")
+#toPlot=moghe.project.sct.cca
+#toPlotDownSampled=downsampled.ctagg.moghe.project.sct.cca
+
+mast_linA=read.table("linA_obj.mastRes.txt", header=T, row.names=1) %>% select(c(timePoint.logFC, timePoint.H_fdr)) %>% setNames(c("Log2FC", "FDR_Q")) %>% 
+  mutate(minusLog10Q=-log10(FDR_Q)) %>% tibble::rownames_to_column("gene")
+mast_linA_down=read.table("linA_obj.mastRes_downsample.txt", header=T, row.names=1) %>% select(c(timePoint.logFC, timePoint.H_fdr)) %>% setNames(c("Log2FC", "FDR_Q")) %>%
+  mutate(minusLog10Q=-log10(FDR_Q)) %>% tibble::rownames_to_column("gene")
+mast_linB=read.table("linB_obj.mastRes.txt", header=T, row.names=1) %>% select(c(timePoint.logFC, timePoint.H_fdr)) %>% setNames(c("Log2FC", "FDR_Q")) %>% 
+  mutate(minusLog10Q=-log10(FDR_Q)) %>% tibble::rownames_to_column("gene")
+mast_linB_down=read.table("linB_obj.mastRes_downsample.txt", header=T, row.names=1) %>% select(c(timePoint.logFC, timePoint.H_fdr)) %>% setNames(c("Log2FC", "FDR_Q")) %>%
+  mutate(minusLog10Q=-log10(FDR_Q)) %>% tibble::rownames_to_column("gene")
+```
+
+
+### Customized volcano plot
+```{r}
+require(ggplot2); require(dplyr)
+
+P_cutOff=0.05
+minuslogFDR_cutoff=-log10(P_cutOff)
+logFC_cutOff=0.1
+
+df=mast_linB
+
+df = df %>% mutate(colorGroup=case_when(abs(Log2FC)>=logFC_cutOff & FDR_Q<=P_cutOff ~ "FDR+Log2FC(MAST)",
+                                                      FDR_Q<=P_cutOff ~ "FDR only",
+                                                      TRUE~"NS"))
+labPlus=df %>% filter(colorGroup=="FDR+Log2FC(MAST)") %>% filter(Log2FC>0) %>% mutate(label_plus=gene) %>% select(c(gene, label_plus))
+labMinus=df %>% filter(colorGroup=="FDR+Log2FC(MAST)") %>% filter(Log2FC<0) %>% mutate(label_minus=gene) %>% select(c(gene, label_minus))
+
+df=df %>% merge(x=., y=labPlus, by.x="gene", all.x=T) %>% merge(x=., y=labMinus, by.x="gene", all.x=T) %>% arrange(FDR_Q)
+colVolcano = c("FDR+Log2FC(MAST)" = "red", "FDR only" = "#DEF9FF", "NS" = "darkgrey")
+xLim=abs(df[["Log2FC"]]) %>% max(.)
+yLim=4
+
+volplot=df %>%  ggplot(., aes(x = Log2FC, y = minusLog10Q, fill = colorGroup))+
+scale_fill_manual(values = colVolcano) +
+geom_point(size = 2, alpha = 0.7, na.rm = T, shape=21, colour = "black") +
+theme_bw(base_size = 14) + 
+theme(legend.position = "top") + 
+geom_text_repel(aes(label=label_plus), nudge_x=0.01, nudge_y = 0.05) +
+geom_text_repel(aes(label=label_minus), nudge_x=-0.02, nudge_y = 0.05) +
+xlab("log2(FC)") + 
+ylab("-log10(Q)") +
+xlim(c(-xLim,xLim)) +
+geom_hline(yintercept = minuslogFDR_cutoff, colour="#990000", linetype="dashed") + geom_vline(xintercept =logFC_cutOff, colour="#990000", linetype="dashed") + geom_vline(xintercept = -logFC_cutOff, colour="#990000", linetype="dashed")
+volplot %>% print(.)
+
+topN=20
+
+#timelyGenes = df %>% filter(FDR_Q<=P_cutOff) %>% mutate(abs_Log2FC=abs(Log2FC)) %>% arrange(desc(abs_Log2FC)) %>% .[1:(2*topN),] %>% select(c(gene,Log2FC, FDR_Q)) %>% mutate(direction=case_when(Log2FC>0~"Up", TRUE~"Down")) %>% arrange(desc(Log2FC))
+
+upGenes = df %>% filter(FDR_Q<=P_cutOff) %>% mutate(abs_Log2FC=abs(Log2FC)) %>% arrange(desc(abs_Log2FC)) %>% filter(Log2FC>0) %>% .[1:(topN),] %>% select(c(gene,Log2FC, FDR_Q)) %>% mutate(direction="up") %>% arrange(desc(Log2FC))
+downGenes = df %>% filter(FDR_Q<=P_cutOff) %>% mutate(abs_Log2FC=abs(Log2FC)) %>% arrange(desc(abs_Log2FC)) %>% filter(Log2FC<0) %>% .[1:(topN),] %>% select(c(gene,Log2FC, FDR_Q)) %>% mutate(direction="down") %>% arrange(desc(Log2FC))
+timelyGenes=bind_rows(upGenes, downGenes)
+
+timelyGenes$gene = timelyGenes$gene %>% factor(., levels=timelyGenes$gene %>% rev(.))
+mastCoeffPlot=timelyGenes %>% ggplot(., aes(x=gene, y=Log2FC, fill=direction))+geom_bar(stat = "identity")+theme_bw()+coord_flip() +      
+  theme(panel.grid.major.x = element_blank(), 
+       panel.grid.minor.x = element_blank(),
+       panel.grid.major.y = element_blank(),
+       panel.grid.minor.y = element_blank(),
+       legend.position = 'none') +
+      labs(title = 'Time-coefficient of\nLineage B transcriptomes',
+        y = 'Log2FC',
+        x = NULL)
+mastCoeffPlot %>% print(.)
+timelyGenes %>% filter(Log2FC>0) %>% .[["gene"]] %>% paste(., collapse=", ")
+timelyGenes %>% filter(Log2FC<0) %>% .[["gene"]] %>% rev(.) %>% paste(., collapse=", ")
+
+```
+
+### tradeSeq setup on Monocle3
+```{r}
+require(magrittr); require(tradeSeq)
+cds=mc3_opc_precc1
+mst = principal_graph(cds)$UMAP
+
+y_to_cells <-  principal_graph_aux(cds)$UMAP$pr_graph_cell_proj_closest_vertex %>%
+  as.data.frame()
+y_to_cells$cells <- rownames(y_to_cells)
+y_to_cells$Y <- y_to_cells$V1
+
+# Get the root vertices
+# It is the same node as above
+root = cds@principal_graph_aux$UMAP$root_pr_nodes
+
+# Get the other endpoints
+endpoints = names(which(igraph::degree(mst) == 1))
+endpoints = endpoints[!endpoints %in% root]
+
+# For each endpoint
+cellWeights = lapply(endpoints, function(endpoint) {
+  # We find the path between the endpoint and the root
+  path = igraph::shortest_paths(mst, root, endpoint)$vpath[[1]]
+  path = as.character(path)
+  # We find the cells that map along that path
+  df = y_to_cells[y_to_cells$Y %in% path, ]
+  df = data.frame(weights = as.numeric(colnames(cds) %in% df$cells))
+  colnames(df) = endpoint
+  return(df)
+  }) %>% do.call(what = 'cbind', args = .) %>%
+    as.matrix()
+rownames(cellWeights) = colnames(cds)
+pseudotime = matrix(pseudotime(cds), ncol = ncol(cellWeights),
+                     nrow = ncol(cds), byrow = FALSE)
+BPPARAM = BiocParallel::bpparam()
+BPPARAM$workers = 30
+#icMat = evaluateK(counts = cds@assays@data$counts, pseudotime = pseudotime, cellWeights = cellWeights,
+#                   k=3:7, nGenes = 100, verbose = TRUE, plot = TRUE)
+sce_fitGAM = fitGAM(counts = cds@assays@data$counts,
+              pseudotime = pseudotime,
+              cellWeights = cellWeights, BPPARAM = BPPARAM)
+```
+
+### tradeSeq setup on Slingshot
+```{r}
+require(magrittr); require(tradeSeq); require(BiocParallel)
+opc_precc1_tumor=cds_subObj_OPCroot@colData %>% as.data.frame(.) %>% filter(celltype%in%c("OPC", "pre-CC1")) %>% filter(orig.ident=="Tumor") %>% rownames(.)
+cds_subObj_OPCroot_tuned=cds_subObj_OPCroot %>% .[,setdiff(colnames(.), opc_precc1_tumor)]
+cds_subObj_OPCroot_tuned = cds_subObj_OPCroot_tuned %>% after_choose(.) %>% learn_graph(.) %>% order_cells(.)
+
+opcRootCdsDF=cds_subObj_OPCroot_tuned@colData %>% as.data.frame(.)
+opc_precc1_sce=cds_subObj_OPCroot_tuned %>% .[,opcRootCdsDF %>% filter(celltype%in%c("OPC", "pre-CC1")) %>% rownames(.)] %>% mc3_slingshot(., start_clus = "OPC", colPalette = newAnnotCols)
+linA_sce=cds_subObj_OPCroot_tuned %>% .[,opcRootCdsDF %>% filter(celltype%in%c("OPC","pre-CC1", "CC1-A")) %>% rownames(.)] %>% mc3_slingshot(., start_clus = "OPC", colPalette = newAnnotCols)
+linB_sce=cds_subObj_OPCroot_tuned %>% .[,opcRootCdsDF %>% filter(celltype%in%c("OPC","pre-CC1", "CC1-B1", "CC1-B2")) %>% rownames(.)] %>% mc3_slingshot(., start_clus = "OPC", colPalette = newAnnotCols)
+
+precc1_cc1A_sce=cds_subObj_OPCroot_tuned %>% .[,opcRootCdsDF %>% filter(celltype%in%c("pre-CC1", "CC1-A")) %>% rownames(.)] %>% mc3_slingshot(., start_clus = "pre-CC1", colPalette = newAnnotCols)
+precc1_cc1B_sce=cds_subObj_OPCroot_tuned %>% .[,opcRootCdsDF %>% filter(celltype%in%c("pre-CC1", "CC1-B1", "CC1-B2")) %>% rownames(.)] %>% mc3_slingshot(., start_clus = "pre-CC1", colPalette = newAnnotCols)
+
+precc2_cc2_sce=sling_subObj_uk2
+
+saveRDS(opc_precc1_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/opc_precc1_sce.rds")
+saveRDS(linA_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/linA_sce.rds")
+saveRDS(linB_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/linB_sce.rds")
+saveRDS(precc1_cc1A_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc1_cc1A_sce.rds")
+saveRDS(precc1_cc1B_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc1_cc1B_sce.rds")
+saveRDS(precc1_cc1B1_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc1_cc1B1_sce.rds")
+saveRDS(cc1B1_cc1B2_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/cc1B1_cc1B2_sce.rds")
+saveRDS(precc2_cc2_sce, "/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc2_cc2_sce.rds")
+```
+
+```{r}
+fitGAM_opc_precc1=opc_precc1_sce %>% fitGAM(.)
+#fitGAM_linA=linA_sce %>% fitGAM(.)
+#fitGAM_linB=linB_sce %>% fitGAM(.)
+
+#fitGAM_precc1_cc1=precc1_cc1_sce %>% fitGAM(.)
+#fitGAM_precc1_cc3=precc1_cc3_sce %>% fitGAM(.)
+#fitGAM_cc3_cc4=cc3_cc4_sce %>% fitGAM(.)
+
+#fitGAM_precc2_cc2=precc2_cc2_sce %>% fitGAM(.)
+
+fitGAM_opc_precc1=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/opc_precc1_sce.fitGAM.rds")
+
+fitGAM_linA=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/linA_sce.fitGAM.rds")
+fitGAM_linB=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/linB_sce.fitGAM.rds")
+
+fitGAM_precc1_cc1A=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc1_cc1A_sce.fitGAM.rds")
+fitGAM_precc1_cc1B1=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc1_cc1B1_sce.fitGAM.rds")
+fitGAM_cc1B1_cc1B2=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/cc1B1_cc1B2_sce.fitGAM.rds")
+fitGAM_precc2_cc2=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc2_cc2_sce.fitGAM.rds")
+
+
+mc3_fitGAM_opc_precc1=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_opc_precc1.fitGAM.rds")
+mc3_fitGAM_linA=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_linA.fitGAM.rds")
+#mc3_fitGAM_cc1B1_cc1B2=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/cc1B1_cc1B2_sce.fitGAM.rds")
+#mc3_fitGAM_precc2_cc2=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc2_cc2_sce.fitGAM.rds")
+
+#fitGAM_cc3_cc4=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/cc3_cc4_sce.fitGAM.rds")
+#fitGAM_precc2_cc2=readRDS(file="/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data/precc2_cc2_sce.fitGAM.rds")
+```
+
+###MC3 graph_Test setup
+```{r}
+
+after_choose=function(cds, reductionName="UMAP"){
+  require(igraph)
+  new_cds=cds
+  cells=colData(cds)$barcode
+  subsetV=cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_closest_vertex[cells,] %>% table(.) %>% names(.) %>% as.numeric()
+  newR=cds@principal_graph_aux[[reductionName]]$R %>% .[cells, subsetV]
+  newStree=cds@principal_graph_aux[[reductionName]]$stree %>% .[subsetV, subsetV]
+  newClosestVertices=cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_closest_vertex %>% .[cells,] %>% as.data.frame(.)
+  
+  new_dp_mst=cds@principal_graph_aux[[reductionName]]$dp_mst %>% .[,subsetV]
+  new_pseudotime=cds@principal_graph_aux[[reductionName]]$pseudotime %>% .[cells]
+  newPartitions=cds@clusters[[reductionName]]$partitions %>% .[cells] %>% droplevels(.)
+  newClusters=cds@clusters[[reductionName]]$clusters %>% .[cells] %>% droplevels(.)
+  
+  new_pr_graph_cell_proj_tree = induced_subgraph(cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_tree, c(cells,colnames(new_dp_mst)))
+  new_pr_graph_cell_proj_dist  = cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_dist %>% .[,cells]
+  
+  new_cds@principal_graph_aux[[reductionName]]$R = newR
+  new_cds@principal_graph_aux[[reductionName]]$stree = newStree 
+  new_cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_closest_vertex = newClosestVertices 
+  new_cds@principal_graph_aux[[reductionName]]$dp_mst = new_dp_mst
+  new_cds@principal_graph_aux[[reductionName]]$pseudotime = new_pseudotime 
+  
+  new_cds@clusters[[reductionName]]$partitions=newPartitions
+  new_cds@clusters[[reductionName]]$clusters=newClusters
+
+  new_cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_tree = new_pr_graph_cell_proj_tree
+  new_cds@principal_graph_aux[[reductionName]]$pr_graph_cell_proj_dist = new_pr_graph_cell_proj_dist
+  return(new_cds)
+}
+
+cds_subset_monocle3=function(cds, celltypes){
+  colData(cds)$pseudotime=cds@principal_graph_aux$UMAP$pseudotime
+  subsetCDS=choose_graph_segments(cds, clear_cds=FALSE)
+  cellsOfInterest=colData(subsetCDS) %>% as.data.frame() %>% filter(celltype %in% celltypes) %>% rownames(.)
+  subsetCDS = subsetCDS %>% .[,cellsOfInterest] %>% after_choose(.) %>% learn_graph(., use_partition = F, close_loop = F) %>% order_cells(.)
+  return(subsetCDS)
+}
+
+mc3_opc_precc1=cds_subset_monocle3(cds_subObj_OPCroot_tuned, c("OPC","pre-CC1"))
+mc3_linA=cds_subset_monocle3(cds_subObj_OPCroot_tuned, c("OPC","pre-CC1", "CC1-A"))
+mc3_linB=cds_subset_monocle3(cds_subObj_OPCroot_tuned, c("OPC","pre-CC1", "CC1-B1", "CC1-B2"))
+
+
+
+#mc3_precc1_cc1A=cds_subset_monocle3(cds_subObj_OPCroot, c("pre-CC1", "CC1-A"))
+#mc3_precc1_cc1B=cds_subset_monocle3(cds_subObj_OPCroot, c("pre-CC1", "CC1-B1", "CC1-B2"))
+
+
+#mc3_precc1_cc1B1=cds_subset_monocle3(cds_subObj_OPCroot, c("pre-CC1", "CC1-B1"))
+#mc3_cc1B1_cc1B2=cds_subset_monocle3(cds_subObj_OPCroot, c("CC1-B1", "CC1-B2"))
+#mc3_precc2_cc2=cds_subObj_uk2
+
+mc3_opc_precc1 %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_opc_precc1.rds")
+mc3_linA %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_linA.rds")
+mc3_linB %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_linB.rds")
+
+#mc3_precc1_cc1A %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_precc1_cc1A.rds")
+#mc3_precc1_cc1B %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_precc1_cc1B.rds")
+
+#mc3_precc1_cc1B1 %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_precc1_cc1B1.rds")
+#mc3_cc1B1_cc1B2 %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_cc1B1_cc1B2.rds")
+#mc3_precc2_cc2 %>% saveRDS(., file="/home/dcha/02.glioblastoma_scRNAseq/rdata/monocle3_data/mc3_precc2_cc2.rds")
+```
+
+
+### Run PseudotimeDE + tradeSeq::fitGAM
+```{r}
+require(slingshot); require(PseudotimeDE); require(scales); require(dplyr); require(tradeSeq); require(monocle3)
+
+set.seed(100)
+
+sling_sce@colData$slingshot=NULL; sling_sce@colData$slingPseudotime_1=NULL
+FQnorm = function(counts){
+  rk = apply(counts,2,rank,ties.method='min')
+  counts.sort = apply(counts,2,sort)
+  refdist = apply(counts.sort,1,median)
+  norm = apply(rk,2,function(r){ refdist[r] })
+  rownames(norm) = rownames(counts)
+  return(norm)
+}
+assays(sling_sce)$norm = log1p(FQnorm(assays(sling_sce)$counts))
+
+#rd = prcomp(t(assays(sling_sce)$norm), scale. = FALSE)$x[,1:npcs]
+rd = prcomp_irlba(t(assays(sling_sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd)= colnames(sling_sce)
+
+reducedDims(sling_sce) = SimpleList(PCA = rd)
+fit_ori = slingshot(sling_sce, reducedDim = 'PCA', clusterLabels = "celltype", start.clus=start_clus)
+
+sling_ori_tbl=tibble(cell = colnames(sling_sce), pseudotime = rescale(colData(fit_ori)$slingPseudotime_1))
+
+options(mc.cores = cores)
+sling_index = mclapply(seq_len(subsampleNum), function(x) {
+  sample(x = c(1:ncol(sling_sce)), size = 0.8*ncol(sling_sce), replace = FALSE)
+})
+
+sling_sub_tbl = mclapply(sling_index, function(x, sce) {
+  sce = sce[, x]
+  #rd = prcomp(t(assays(sce)$norm), scale. = FALSE)$x[,1:npcs]
+  rd = prcomp_irlba(t(assays(sce)$norm), scale. = FALSE, n=npcs)$x; rownames(rd)= colnames(sce)
+  reducedDims(sce) = SimpleList(PCA = rd)
+  
+  fit = slingshot(sce, reducedDim = 'PCA', clusterLabels = "celltype", start.clus=start_clus)
+  tbl = tibble(cell = colnames(sce), pseudotime = rescale(colData(fit)$slingPseudotime_1))
+  
+  ## Make sure the direction is the same as the original pseudotime
+  merge.tbl = left_join(tbl, sling_ori_tbl, by = "cell")
+  
+  if(cor(merge.tbl$pseudotime.x, merge.tbl$pseudotime.y) < 0) {
+    tbl = dplyr::mutate(tbl, pseudotime = 1-pseudotime)
+  }
+  
+  tbl
+}, sce = sling_sce)
+
+pcIterativePseudotime=colnames(sling_sce) %>% as.data.frame(.) %>% setNames("cell")
+for(i in 1:length(sling_sub_tbl)){
+  pcIterativePseudotime=merge(x=pcIterativePseudotime, y=as.data.frame(sling_sub_tbl[[i]]), by="cell", all.x=T)
+}
+pcIterativePseudotime = pcIterativePseudotime %>% tibble::column_to_rownames("cell") %>% setNames(paste0("pseudotime",1:length(sling_sub_tbl)))
+
+avgSlingPC_pseudotime=(pcIterativePseudotime %>% rowMeans(.,na.rm = T))[colnames(sling_sce)] ### Averaged pseudotime
+
+sling_avg_tbl=tibble(cell = colnames(sling_sce), pseudotime = avgSlingPC_pseudotime)
+
+
+res_PseudotimeDE = PseudotimeDE::runPseudotimeDE(gene.vec = rownames(sling_sce),
+                                                 ori.tbl = sling_avg_tbl,
+                                                 sub.tbl = sling_sub_tbl,
+                                                 sce = sling_sce,
+                                                 model = glm_type, mc.cores=cores)
+
+sling.avgPT.sce = fit_ori
+colData(sling.avgPT.sce)$slingPseudotime_1=avgSlingPC_pseudotime
+avgPT=avgSlingPC_pseudotime %>% as.matrix(.); colnames(avgPT)="Lineage1"
+sling.avgPT.sce@colData$slingshot@assays@data$pseudotime=avgPT
+cellWeights=sling.avgPT.sce@colData$slingshot@assays@data$weights
+
+#fitGAM_sce = fitGAM(fit_ori,nknots=nknots)
+#assoRes = associationTest(fitGAM_sce)
+#assoRes$fdr_q=p.adjust(assoRes$pvalue)
+
+graph_test_res = monocle3::graph_test(cds_monocle3,  neighbor_graph="principal_graph", cores=cores)
+
+BPPARAM = BiocParallel::bpparam()
+BPPARAM$workers = cores
+fitGAM_avgPT.sce = fitGAM(counts=as.matrix(assays(sling.avgPT.sce)$counts),
+                    pseudotime=avgPT, cellWeights=cellWeights,
+                    nknots=nknots,
+                    parallel=TRUE, BPPARAM = BPPARAM)
+assoRes.avgPT = associationTest(fitGAM_avgPT.sce)
+assoRes.avgPT$fdr_q=p.adjust(assoRes.avgPT$pvalue)
+
+resList=list(fit_ori, fitGAM_avgPT.sce, res_PseudotimeDE, assoRes.avgPT, graph_test_res)
+names(resList)=c("sce", "avgPT.sce", "PseudotimeDE", "tradeSeq.avgPT", "mc3_graphTest")
+saveRDS(resList, paste0(path,"mc3.slingTradePT.pc",npcs,".nk",nknots,".",glm_type,".sample",subsampleNum,".",fn))
+
+
+```
+
+### Venn_diagram
+```{r}
+# library
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca")
+
+#Make the plot
+three_vennPlot=function(dataList, fn, tradeSeq_only, manual=F){
+  require(scales); require(VennDiagram)
+  if(is.null(names(dataList))){
+    catNames=c("Set 1", "Set 2", "Set 3")
+  }else{
+    catNames=names(dataList)
+  }
+  
+  if(tradeSeq_only==0){
+    cat_pos=c(-165, 165, 0)
+    cat_dist=c(0.02, 0.02, 0.1)
+  }else if(manual){
+    cat_pos=c(-165, 165, 0)
+    cat_dist=c(0.055, 0.055, 0.15)
+  }else{
+    cat_pos=c(-15, 15, 135)
+    cat_dist=c(0.055, 0.055, 0.085)
+  }
+venn.diagram(
+  x = dataList,
+  category.names = catNames,
+  filename = paste0(fn, '_venn.png'),
+  output = TRUE ,
+          imagetype="png" ,
+          height = 600 , 
+          width = 600 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.8,
+          fontfamily = "sans",
+          cat.cex = 0.75,
+          cat.default.pos = "outer",
+          cat.pos = cat_pos,
+          cat.dist = cat_dist,
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+        )
+}
+three_vennPlot(list("tradeSeq"=rownames(tradeSeq_pag),
+                    "PseudotimeDE"=ptde_pag$gene,
+                    "monocle3\ngraph test"=rownames(graph_pag)),
+               fn=lin, tradeSeq_only,manual=T)
+
+print(paste0("PseudotimeDE-only: ", length(setdiff(ptde_pag$gene, union(rownames(tradeSeq_pag), rownames(graph_pag))))))
+print(paste0("tradeSeq-only: ", length(setdiff(rownames(tradeSeq_pag), union(ptde_pag$gene, rownames(graph_pag))))))
+print(paste0("monocle3-graphTest-only: ", length(setdiff(rownames(graph_pag), union(ptde_pag$gene, rownames(tradeSeq_pag))))))
+
+print(paste0("PseudotimeDE-tradeSeq: ", length(setdiff(ptde_trade, rownames(graph_pag)))))
+print(paste0("PseudotimeDE-graphTest: ", length(setdiff(ptde_graph, rownames(tradeSeq_pag)))))
+print(paste0("tradeSeq-graphTest: ", length(setdiff(trade_graph, ptde_pag$gene))))
+print(paste0("All-shared: ", length(allShared)))
+```
+
+### SCENIC optimization
+```{r}
+require(SingleCellExperiment)
+#opcRoot_cds=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/cds_subObj_OPCroot.rds")
+
+#opcRoot_sce=mc3_slingshot(cds=opcRootCds,de_novo = F,reduction = "both")
+
+exprMat = counts(opcRootCdsDF)
+cellInfo = colData(opcRoot_sce)
+             
+```
+
+### subAnalyses
+```{r}
+#lin="opc_precc1"
+#lin="precc1_cc1A"
+#lin="precc1_cc1B"
+
+lin="opc_precc1"
+#lin="linA"
+#lin="linB"
+#lin="precc2_cc2"
+
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/")
+#slingPAG=readRDS(paste0("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/irlba_final.mc3.slingTradePT.pc20.nb.sample100.",lin,".rds"))
+#slingPAG=readRDS(paste0("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/irlba_final.mc3.slingTradePT.pc2.nb.sample100.",lin,".rds"))
+slingPAG=readRDS(paste0("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/irlba_final.mc3.slingTradePT.pc20.nb.sample100.",lin,"_sce.rds"))
+#slingPAG=readRDS(paste0("/home/dcha/02.glioblastoma_scRNAseq/rdata/slingshot_data_pca/seurat.mc3.slingTradePT.pc20.nb.sample100.",lin,".rds"))
+sce_slingshot_FitGAM=slingPAG$sce
+firstPT = slingPAG$firstPT
+avgPT=slingPAG$avgPT
+
+sce_slingshot_FitGAM$slingshot$pseudotime.Lineage1=avgPT
+sce_slingshot_FitGAM$slingPseudotime_1=avgPT
+
+ptde.res=slingPAG$PseudotimeDE
+ptde_pag=ptde.res %>% filter(para.pv<0.05) %>% filter(fix.pv<0.05) %>% arrange(desc(rank))
+
+tradeSeq_assoc=slingPAG$tradeSeq.avgPT
+tradeSeq_pag=tradeSeq_assoc %>% filter(!is.na(fdr_q)) %>% filter(fdr_q<0.05) %>% arrange(fdr_q)
+
+graph_test_res=slingPAG$mc3_graphTest
+graph_pag = subset(graph_test_res, q_value < 0.05)
+
+ptde_trade=intersect(ptde_pag$gene, rownames(tradeSeq_pag))
+ptde_graph=intersect(ptde_pag$gene, rownames(graph_pag))
+trade_graph=intersect(rownames(tradeSeq_pag), rownames(graph_pag))
+
+allShared=intersect(ptde_trade, rownames(graph_pag))
+
+
+tradeSeq_only=length(setdiff(rownames(tradeSeq_pag), union(ptde_pag$gene, rownames(graph_pag))))
+PseudotimeDE_only=length(setdiff(ptde_pag$gene, union(rownames(tradeSeq_pag), rownames(graph_pag))))
+monocle3_graphTest_only=length(setdiff(rownames(graph_pag), union(ptde_pag$gene, rownames(tradeSeq_pag))))
+
+three_vennPlot(list("tradeSeq"=rownames(tradeSeq_pag),
+                    "PseudotimeDE"=ptde_pag$gene,
+                    "monocle3\ngraph test"=rownames(graph_pag)),
+               fn=lin, tradeSeq_only, manual=F)
+```
+
+### PAG - NMF for metaGene clustering
+```{r}
+require(dplyr); require(ComplexHeatmap); require(zoo); require(RColorBrewer); require(scales); require(NNLM)
+
+set.seed(100)
+use_all_gene=TRUE
+
+#nmf_params=list("nmfSigNum"=3, "wMatCoeffThreshold"=50, "assignProbDiff"=0.0)
+nmf_params=list("nmfSigNum"=4, "wMatCoeffThreshold"=50, "assignProbDiff"=0.0)
+#nmf_params=list("nmfSigNum"=5, "wMatCoeffThreshold"=50, "assignProbDiff"=0.0, toShowNum=7)
+
+nmfSigNum=nmf_params$nmfSigNum
+#topGenesPerMetaGene=nmf_params$topGenesPerMetaGene
+#topGenesPerMetaGene=10000
+
+wMatCoeffThreshold=nmf_params$wMatCoeffThreshold
+assignProbDiff = nmf_params$assignProbDiff
+secondaryThreshold=nmf_params$secondaryThreshold
+#secondaryThreshold=1/(nmf_params$nmfSigNum)
+
+#if(use_all_gene){
+#  topGenesPerMetaGene=10000
+#}
+#binSize=floor(length(colnames(sce_slingshot_FitGAM))/1000)*10
+binSize=20
+
+sceData=sce_slingshot_FitGAM
+sce_cellMeta=bind_cols(sceData@colData$orig.ident, sceData@colData$celltype, sceData@colData$slingPseudotime_1) %>% 
+  setNames(c("Time", "CellType", "Pseudotime")) %>% as.data.frame(.)
+#sce_cellMeta$Pseudotime=cds_monocle3@principal_graph_aux$UMAP$pseudotime
+
+FQnorm = function(counts){
+  rk = apply(counts,2,rank,ties.method='min')
+  counts.sort = apply(counts,2,sort)
+  refdist = apply(counts.sort,1,median)
+  norm = apply(rk,2,function(r){ refdist[r] })
+  rownames(norm) = rownames(counts)
+  return(norm)
+}
+
+exprLevel = assays(sceData)$norm[allShared,] %>% t(.) %>% as.data.frame(.)
+#exprLevel = assays(sceData)$counts[allShared,] %>% t(.)  %>% FQnorm(.) %>% log1p(.)
+
+top_pt_genesDF=bind_cols(sce_cellMeta, exprLevel) %>% arrange(Pseudotime)
+
+toHistFirst=cbind(sce_slingshot_FitGAM@colData$celltype %>% as.character(.), firstPT) %>% as.data.frame(.) %>% setNames(c("celltype", "pseudotime"))
+
+newAnnotCols_local=newAnnotCols[toHistFirst$celltype %>% unique(.)]
+toHistFirst$pseudotime = toHistFirst$pseudotime %>% as.numeric(.)
+firstPTplot=toHistFirst %>% ggplot(., aes(x=pseudotime, fill=celltype))+geom_histogram()+theme_bw()+ggtitle("first_pseudotime")+theme(axis.text=element_blank())+scale_fill_manual(values=newAnnotCols_local)
+
+toHistAvg=cbind(sce_slingshot_FitGAM@colData$celltype %>% as.character(.), avgPT) %>% as.data.frame(.) %>% setNames(c("celltype", "pseudotime"))
+newAnnotCols_local=newAnnotCols[unique(toHistAvg$celltype)]
+
+toHistAvg$pseudotime = toHistAvg$pseudotime %>% as.numeric(.)
+avgPTplot=toHistAvg %>% ggplot(., aes(x=pseudotime, fill=celltype))+geom_histogram()+theme_bw()+ggtitle("averaged_pseudotime")+theme(axis.text=element_blank())+scale_fill_manual(values=newAnnotCols_local)
+cowplot::plot_grid(firstPTplot, avgPTplot, nrow=2)
+
+toHistAvg %>% ggplot(., aes(x=pseudotime, fill=celltype))+geom_density(alpha=0.7)+theme_classic()+theme(axis.text=element_blank())+scale_fill_manual(values=newAnnotCols_local)
+
+bind_cols(firstPT, avgPT) %>% as.data.frame() %>% setNames(c("first_pseudotime", "averaged_pseudotime")) %>% 
+  ggplot(., aes(x=averaged_pseudotime, y=first_pseudotime))+geom_point(size=0.5, alpha=0.5)+theme_classic()
+
+top_pt_genesDF2 = top_pt_genesDF
+top_pt_genesDF2$Pseudotime = top_pt_genesDF2$Pseudotime - min(top_pt_genesDF2$Pseudotime)   
+
+full_matrix=top_pt_genesDF2 %>% .[,(which("Pseudotime" == colnames(.))+1):ncol(.)] %>% t(.)
+
+
+binnedMatrix=full_matrix[,1:binSize] %>% rowMeans(.) %>% as.matrix(.)
+for (b in 1:(floor(ncol(full_matrix)/binSize)-1)){
+  newColAvgVector=full_matrix[,(b*binSize):((b+1)*binSize)] %>% rowMeans(.)
+  binnedMatrix=cbind(binnedMatrix,newColAvgVector)
+}
+colnames(binnedMatrix)=paste0("pt", 1:ncol(binnedMatrix))
+```
+
+### PAG - further visualization (K-means)
+```{r}
+require(ComplexHeatmap); require(cowplot)
+clusterNum=5
+top_pt_genesDF2 = top_pt_genesDF
+top_pt_genesDF2$Pseudotime = top_pt_genesDF2$Pseudotime - min(top_pt_genesDF2$Pseudotime)   
+
+plot_list=list()
+#if(pseudotime_style=="slingshot"){
+#if(!use_all_gene){
+#  for (n in 1:15){
+#    p=sceData %>% tradeSeq::plotSmoothers(., .@assays@data$count, allShared[n], pointCol="celltype")+ggtitle(allShared[n])+
+#      theme(legend.position="none", axis.title.y=element_blank())
+#    plot_list[[n]]=p
+#  }
+#  plot_grid(plotlist = plot_list, ncol=3)
+#  sceData %>% tradeSeq::plotSmoothers(., .@assays@data$count, "Gap43", pointCol="celltype")+ggtitle("Gap43")}
+#}else if(pseudotime_style=="monocle3"){
+#  if(!use_all_gene){
+#    for (n in 1:15){
+#      p=sceData[allShared[n],] %>% monocle3::plot_genes_in_pseudotime(., color_cells_by = "celltype")+ggtitle(allShared[n])+
+#      theme(legend.position="none", axis.title.y=element_blank())
+#      plot_list[[n]]=p
+#    }
+#    plot_grid(plotlist = plot_list, ncol=3)
+#    sceData["Gap43",] %>% monocle3::plot_genes_in_pseudotime(., color_cells_by = "celltype")+ggtitle("Gap43")}
+#}
+
+
+mat_top_pt=top_pt_genesDF2 %>% .[,(which("Pseudotime" == colnames(.))+1):ncol(.)]
+
+top_pt_annotations = top_pt_genesDF2 %>% dplyr::select(c(Pseudotime, Time, CellType))
+timeColor=brewer.pal(top_pt_annotations$Time %>% levels(.) %>% length(.),"RdPu")
+names(timeColor)=top_pt_annotations$Time %>% levels(.) 
+cellTypes=top_pt_annotations$CellType %>% droplevels() %>% levels(.)
+ha = HeatmapAnnotation(df=top_pt_annotations,
+                       col=list(Pseudotime=circlize::colorRamp2(c(0, max(top_pt_genesDF2$Pseudotime) %>% ceiling(.)), c("white", "blue")),
+                                Time=timeColor,
+                                CellType=newAnnotCols[cellTypes]))
+minExp=-2
+maxExp=2
+col_fun = circlize::colorRamp2(seq(minExp,maxExp, (maxExp-minExp)/4), c("#004de8", "#25b05f","#f5ff85", "#ff7588","#c20a00"), space="sRGB")
+set.seed(100)
+kmRes=kmeans(mat_top_pt %>% t(.), clusterNum)$cluster
+
+h=Heatmap(mat_top_pt %>% t(.), name="log2(count+1)", show_row_names = T, show_column_names = F, cluster_columns=F,
+        top_annotation=ha, show_row_dend = F,
+        col=col_fun, 
+        row_split = kmRes, use_raster = F
+        )
+draw(h)
+
+
+medianMaxIndices=c()
+for (i in 1:length(row_order(h))){
+  oneCluster=t(mat_top_pt) %>% .[row_order(h)[[i]],]
+  maxIndices=c()
+  if (is.null(nrow(oneCluster))){
+    maxIndices=c(maxIndices, which.max(oneCluster))
+  }else{
+  for (j in 1:nrow(oneCluster)){
+    maxIndices=c(maxIndices, which.max(oneCluster[j,]))
+    }
+  }
+  medianMaxIndices=c(medianMaxIndices, median(maxIndices))
+}
+
+
+
+rowOrder2=list()
+splitter=c()
+num=1
+for (i in order(medianMaxIndices) %>% rev(.)){
+  rowOrder2[[num]]=row_order(h)[[i]]
+  splitter_Tmp=rep(num,length(row_order(h)[[i]]))
+  names(splitter_Tmp)=colnames(mat_top_pt)[rowOrder2[[num]]]
+  splitter=c(splitter, splitter_Tmp)
+  num=num+1
+}
+splitter_ordered=splitter[colnames(mat_top_pt)]
+
+reOrderedMat=t(mat_top_pt)[unlist(rowOrder2),]
+binnedMatrix=reOrderedMat[,1:binSize] %>% rowMeans(.) %>% as.matrix(.)
+for (b in 1:(floor(nrow(mat_top_pt)/binSize)-1)){
+  newColAvgVector=reOrderedMat[,(b*binSize):((b+1)*binSize)] %>% rowMeans(.)
+  binnedMatrix=cbind(binnedMatrix,newColAvgVector)
+}
+
+kernSmooth.binnedMatrix = matrixkernSmoothing(binnedMatrix)
+
+colorBreaks=kernSmooth.binnedMatrix %>% as.vector(.) %>% quantile(., probs=c(0, 1))
+heatPal=heatPal=brewer.pal(name = "RdYlBu", n=11) %>% rev(.) %>% .[1:10]# %>% .[c(2,3,4,7,9,10,11)]
+originalSpectral = colorRampPalette(heatPal)(100)[1:95]
+
+pheat=ComplexHeatmap::pheatmap(kernSmooth.binnedMatrix, cluster_rows = F, cluster_cols = F, show_colnames = F, row_split=splitter_ordered[rownames(kernSmooth.binnedMatrix)],border_color=NA,
+color = originalSpectral,
+breaks = colorBreaks,
+legend_breaks =  colorBreaks, legend_labels = c("Low", "High"),
+)
+pheat %>% print(.)
+
+
+pheat=ComplexHeatmap::pheatmap(kernSmooth.binnedMatrix[kernSmooth.binnedMatrix %>% t(.) %>% as.data.frame(.) %>% sapply(., which.max) %>% .[rev(order(.))] %>% names(.),],
+                               cluster_rows = F, cluster_cols = F, show_colnames = F, border_color=NA,
+color = originalSpectral,
+breaks = colorBreaks,
+legend_breaks =  colorBreaks, legend_labels = c("Low", "High"),
+)
+pheat %>% print(.)
+
+clusteredModules=list()
+clusteredModules_to_show=list()
+```
+
+```{r}
+for (i in 1:(splitter %>% unique(.) %>% length(.))){
+  clusteredModules[[i]]=splitter[splitter==i] %>% names(.)
+  clusteredModules_to_show[[i]]=paste(splitter[splitter==i] %>% names(.), collapse = ", ")
+}
+print(unlist(clusteredModules_to_show))
+
+manualOrder=c(3,2,1,5,4)
+splitterDf=NULL
+manualOrderList=list()
+clusteredModules2=list()
+clusteredModules_to_show2=list()
+
+for (num in 1:length(manualOrder)){
+  manualOrderList[[num]]=rowOrder2[[manualOrder[num]]]
+  clusteredModules2[[num]]=clusteredModules[[manualOrder[num]]]
+  clusteredModules_to_show2[[num]]=paste(clusteredModules[[manualOrder[num]]], collapse = ", ")
+
+  splitterDf=rbind(splitterDf,cbind(manualOrderList[[num]], rep(num, length(manualOrderList[[num]]))) %>% as.data.frame(.))
+}
+splitterDf = splitterDf %>% setNames(c("geneIdx", "geneModule"))
+splitterDf[["gene"]]=colnames(mat_top_pt)[splitterDf$geneIdx]
+
+splitter=splitterDf$geneModule
+names(splitter)=splitterDf$gene
+
+reOrderedMat=t(mat_top_pt)[unlist(manualOrderList),]
+binnedMatrix=reOrderedMat[,1:binSize] %>% rowMeans(.) %>% as.matrix(.)
+for (b in 1:(floor(nrow(mat_top_pt)/binSize)-1)){
+  newColAvgVector=reOrderedMat[,(b*binSize):((b+1)*binSize)] %>% rowMeans(.)
+  binnedMatrix=cbind(binnedMatrix,newColAvgVector)
+}
+
+kernSmooth.binnedMatrix = matrixkernSmoothing(binnedMatrix)
+
+pheat=ComplexHeatmap::pheatmap(kernSmooth.binnedMatrix, cluster_rows = F, cluster_cols = F, show_colnames = F, row_split=splitter,border_color=NA,
+color = originalSpectral,
+breaks = colorBreaks,
+legend_breaks =  colorBreaks, legend_labels = c("Low", "High"),
+)
+pheat %>% print(.)
+
+print(unlist(clusteredModules_to_show2))
+
+#for (num in splitterDf$geneModule %>% unique(.)){
+#  print(num)
+#  print(splitterDf %>% filter(geneModule==num) %>% .[["gene"]] %>% paste(., collapse=", "))
+#}
+```
+
+
+### PAG - NMF and visualization (deprecated)
+```{r}
+require(ComplexHeatmap); require(cowplot); require(zoo)
+
+add.flag = function(pheatmap,
+                     kept.labels,
+                     repel.degree,
+                    disperse) {
+
+  heatmap = pheatmap$gtable
+  new.label = heatmap$grobs[[which(heatmap$layout$name == "row_names")]] 
+  new.label$label = ifelse(new.label$label %in% names(kept.labels), 
+                            new.label$label, "")
+
+  repelled.y = function(d, d.select, k = repel.degree, addMore){
+    strip.npc = function(dd){
+      dd=dd %>% as.character() %>% strsplit('\\(') %>% lapply(., function(x) x[[2]]) %>% unlist(.) %>% strsplit("\\, ") %>% lapply(., function(x) c(gsub("npc", "", x[1]), gsub("npc", "", x[2])) %>% as.numeric(.) %>% sum(.)) %>% unlist(.)
+      return(dd)
+    }
+
+    full.range = sapply(seq_along(d), function(i) strip.npc(d[i]))
+    selected.range = sapply(seq_along(d[d.select]), function(i) strip.npc(d[d.select][i]))
+
+    return(seq(from = max(selected.range) + k*(max(full.range) - max(selected.range)),
+                    to = min(selected.range) - k*(min(selected.range) - min(full.range)), 
+                    length.out = sum(d.select)) + addMore)
+  }
+  
+  labels=unique(kept.labels) %>% .[order(.)]
+  new.y.positions=c()
+
+  for (idx in labels){
+  new.y.positions = c(new.y.positions, 
+                      repelled.y(new.label$y,
+                                 d.select = new.label$label %in% names(kept.labels[kept.labels==idx]),
+                                 addMore=disperse[idx]))
+  }
+  new.y.positions=unit(new.y.positions, "npc")
+  new.flag = segmentsGrob(x0 = new.label$x,
+                           x1 = new.label$x + unit(0.1, "npc"),
+                           y0 = new.label$y[new.label$label != ""],
+                           y1 = new.y.positions)
+
+  new.label$x = new.label$x + unit(0.15, "npc")
+  new.label$y[new.label$label != ""] = new.y.positions
+
+  heatmap = gtable::gtable_add_grob(x = heatmap,
+                                   grobs = new.flag,
+                                   t = 4, 
+                                   l = 4
+  )
+
+  heatmap$grobs[[which(heatmap$layout$name == "row_names")]] = new.label
+  return(heatmap)
+}
+
+#plot_list=list()
+#if(pseudotime_style=="slingshot"){
+#if(!use_all_gene){
+#  for (n in 1:15){
+#    p=sceData %>% tradeSeq::plotSmoothers(., .@assays@data$count, allShared[n], pointCol="celltype")+ggtitle(sharedGenes[n])+
+#      theme(legend.position="none", axis.title.y=element_blank())
+#    plot_list[[n]]=p
+#  }
+#  plot_grid(plotlist = plot_list, ncol=3)
+#  sceData %>% tradeSeq::plotSmoothers(., .@assays@data$count, "Gap43", pointCol="celltype")+ggtitle("Gap43")}
+#}else if(pseudotime_style=="monocle3"){
+#  if(!use_all_gene){
+#    for (n in 1:15){
+#      p=sceData[sharedGenes[n],] %>% monocle3::plot_genes_in_pseudotime(., color_cells_by = "celltype")+ggtitle(sharedGenes[n])+
+#      theme(legend.position="none", axis.title.y=element_blank())
+#      plot_list[[n]]=p
+#    }
+#    plot_grid(plotlist = plot_list, ncol=3)
+#    sceData["Gap43",] %>% monocle3::plot_genes_in_pseudotime(., color_cells_by = "celltype")+ggtitle("Gap43")}
+#}
+
+
+matrixkernSmoothing=function(mat, kernSmoothDiv=10){
+kernSmoothingSigma=ncol(mat)/kernSmoothDiv
+kernSmoothedMatrix=matrix(nrow = nrow(mat), ncol=ncol(mat))
+for (idx in 1:nrow(mat)){
+  rawRow=mat[idx,]
+  kernSmoothedRow=rbind(rawRow, rawRow) %>% as.matrix(.) %>% as.im(.) %>% blur(.,sigma = kernSmoothingSigma) %>% as.matrix() %>% .[1,]
+  kernSmoothedMatrix[idx,]=kernSmoothedRow
+}
+rownames(kernSmoothedMatrix)=rownames(mat)
+colnames(kernSmoothedMatrix)=colnames(mat)
+return(kernSmoothedMatrix)
+}
+
+window=5
+step=1
+
+kernSmooth.binnedMatrix = matrixkernSmoothing(binnedMatrix)
+kernSmooth.binnedMatrix = kernSmooth.binnedMatrix[order(apply(t(rollapply(t(kernSmooth.binnedMatrix), width=window, by=step, FUN=mean)), 1, which.max)),]
+kernSmooth.binnedMatrix=kernSmooth.binnedMatrix %>% .[nrow(.):1,]
+
+set.seed(100)
+to_decompose=full_matrix
+#to_decompose=binnedMatrix
+
+decomp = nnmf(to_decompose , k=nmfSigNum, rel.tol = 1e-5)
+
+wMat_unsorted=decomp$W
+hMat_unsorted=decomp$H
+
+rownames(wMat_unsorted)=rownames(to_decompose); colnames(wMat_unsorted)=paste0("metaGene_unsorted", 1:nmfSigNum)
+colnames(hMat_unsorted)=colnames(to_decompose); rownames(hMat_unsorted)=paste0("metaGene_unsorted", 1:nmfSigNum)
+
+## Max indices of index-weighted matrix were extracted to order NMF signatures 
+metaGeneOrder = (t(hMat_unsorted) * sqrt(1:ncol(hMat_unsorted))) %>% as.data.frame(.) %>% sapply(., function(x) which.max(x)) %>% .[rev(order(.))]
+
+wMat = wMat_unsorted[,names(metaGeneOrder)]
+hMat = hMat_unsorted[names(metaGeneOrder),]
+
+colnames(wMat)=paste0("metaGene_NMF", nmfSigNum:1); rownames(hMat)=paste0("metaGene_NMF", nmfSigNum:1)
+
+nmfSortedGenes=wMat %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) which.max(x)) %>% .[rownames(kernSmooth.binnedMatrix)] %>% .[order(.)]
+#metaGeneAssigned=metaGeneAssignedNum %>% paste0("metaGene_NMF", .); names(metaGeneAssigned)=rownames(wMat)
+
+wMatAssignedProp = wMat %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) x/sum(x)) %>% t(.) %>% .[names(nmfSortedGenes),] %>% .[,ncol(.):1]
+colnames(wMatAssignedProp)=colnames(wMat)
+
+scaled.kernSmooth.binnedMatrix = kernSmooth.binnedMatrix[names(nmfSortedGenes),] %>% t(.) %>% scale(., center=FALSE) %>% t(.)
+
+heatPal=brewer.pal(name = "RdYlBu", n=11) %>% rev(.)
+originalSpectral = colorRampPalette(heatPal)(100)[1:95]
+
+highContribGenes=c()
+toShowRowName=c("Gap43", "EGFRvIII")
+  
+wMat_assigned=wMat[names(nmfSortedGenes),] %>% as.data.frame(.) %>% mutate(assigned=nmfSortedGenes)
+for (idx in 1:nmfSigNum){
+  wMat_chunk = wMat_assigned %>% filter(assigned==idx)
+  noSecondaryAssignment=wMatAssignedProp[rownames(wMat_chunk),] %>% t(.) %>% as.data.frame(.) %>% 
+    sapply(., function(x) x[which(x==sort(x, decreasing = T)[2])][1]) %>% .[.<=secondaryThreshold] %>% names(.)
+  topGenesPerMetaGene.tmp=min(length(noSecondaryAssignment), topGenesPerMetaGene)
+  topGenesperModule.unsorted=wMat_chunk[noSecondaryAssignment,] %>% arrange(desc(.[[idx]])) %>% rownames(.) %>% .[1:topGenesPerMetaGene.tmp]
+  toShowRowName=c(toShowRowName, topGenesperModule.unsorted[1:10])
+  highContribGenes=c(highContribGenes, rownames(wMat_chunk) %>% .[.%in%topGenesperModule.unsorted])
+}
+
+
+toHeat = scaled.kernSmooth.binnedMatrix[highContribGenes,]
+
+if(use_all_gene){
+pheatGaps=nmfSortedGenes[highContribGenes] %>% table(.) %>% as.numeric(.) %>% cumsum(.)
+pheat=pheatmap::pheatmap(toHeat,
+                         cluster_rows =F, cluster_cols = F, show_colnames = F, show_rownames = T, border_color=NA, 
+                         gaps_row = pheatGaps, row_title = NULL,annotation_legend =FALSE, annotation_names_row =FALSE,
+                         color = originalSpectral,
+                         legend_breaks = c(0.1,floor(10*max(scaled.kernSmooth.binnedMatrix))/10), legend_labels = c("Low", "High"))
+pheat2=add.flag(pheat, nmfSortedGenes[toShowRowName], 0.05, c(0.02, 0, -0.01))
+nmfWeightPlot=pheatmap::pheatmap(wMatAssignedProp[highContribGenes,], 
+                                       cluster_cols = F, cluster_rows = F, row_title=NULL, legend=FALSE, show_rownames =FALSE, show_colnames = FALSE,
+                                       gaps_row = pheatGaps)
+}else{
+pheatGaps=nmfSortedGenes %>% table(.) %>% as.numeric(.) %>% cumsum(.)
+pheat=pheatmap::pheatmap(scaled.kernSmooth.binnedMatrix,
+                         cluster_rows =F, cluster_cols = F, show_colnames = F,border_color=NA,
+                         gaps_row = pheatGaps, row_title = NULL,
+                         color = originalSpectral,
+                         legend_breaks = c(0.1,floor(10*max(scaled.kernSmooth.binnedMatrix))/10), legend_labels = c("Low", "High")) 
+nmfWeightPlot=pheatmap::pheatmap(wMatAssignedProp, 
+                                       cluster_cols = F, cluster_rows = F, row_title=NULL, legend=FALSE, show_rownames =FALSE, show_colnames = FALSE,
+                                       gaps_row = pheatGaps)
+}
+
+
+
+cowplot::plot_grid(nmfWeightPlot[[4]],pheat2, nrow=1, rel_widths = c(1,5))
+
+#top_pt_annotations = top_pt_genesDF2 %>% dplyr::select(c(Pseudotime, Time, CellType))
+top_pt_annotations = top_pt_genesDF2 %>% dplyr::select(c(Pseudotime,  CellType))
+
+#timeColor=brewer.pal(top_pt_annotations$Time %>% levels(.) %>% length(.),"RdPu")
+names(timeColor)=top_pt_annotations$Time %>% levels(.) 
+cellTypes=top_pt_annotations$CellType %>% droplevels() %>% levels(.)
+ha = HeatmapAnnotation(df=top_pt_annotations,
+                       col=list(Pseudotime=circlize::colorRamp2(c(0, max(top_pt_genesDF2$Pseudotime) %>% ceiling(.)), c("white", "blue")),
+#                                Time=timeColor,
+                                CellType=newAnnotCols[cellTypes]))
+
+topAnnotPlot=Heatmap(matrix(0, nrow=2, ncol=ncol(full_matrix)), name="log2(count+1)", show_row_names = T, show_column_names = F, cluster_columns=F,
+         top_annotation=ha, show_row_dend = F, 
+         use_raster = F)
+draw(topAnnotPlot)
+
+metagene_assigned_list=list()
+for (idx in unique(nmfSortedGenes)){
+  metagene_assigned_list[[idx]]=nmfSortedGenes[highContribGenes] %>% .[.==idx] %>% names(.)
+}
+metagene_assigned_list %>% lapply(., function(x) paste0(x, collapse=" "))
+names(metagene_assigned_list)=colnames(wMat)
+```
+
+### PAG - Smoothing, scaling, ordering and NMF-based metagene discovery
+```{r}
+require(ComplexHeatmap); require(cowplot); require(zoo); require(spatstat)
+
+add.flag = function(pheatmap,
+                     kept.labels,
+                     repel.degree=NULL,
+                    disperse=NULL) {
+
+  heatmap = pheatmap$gtable
+  new.label = heatmap$grobs[[which(heatmap$layout$name == "row_names")]] 
+  new.label$label = ifelse(new.label$label %in% names(kept.labels), 
+                            new.label$label, "")
+
+  repelled.y = function(d, d.select, k, addMore){
+    strip.npc = function(dd){
+      dd=dd %>% as.character() %>% strsplit('\\(') %>% lapply(., function(x) x[[2]]) %>% unlist(.) %>% strsplit("\\, ") %>% lapply(., function(x) c(gsub("npc", "", x[1]), gsub("npc", "", x[2])) %>% as.numeric(.) %>% sum(.)) %>% unlist(.)
+      return(dd)
+    }
+
+    full.range = sapply(seq_along(d), function(i) strip.npc(d[i]))
+    selected.range = sapply(seq_along(d[d.select]), function(i) strip.npc(d[d.select][i]))
+
+    return(seq(from = max(selected.range) + k*(max(full.range) - max(selected.range)),
+                    to = min(selected.range) - k*(min(selected.range) - min(full.range)), 
+                    length.out = sum(d.select)) + addMore)
+  }
+  
+  labels=unique(nmfSortedGenes[toShowRowName]) %>% .[order(.)]
+  new.y.positions=c()
+  
+  if(is.null(repel.degree)){
+    repel.degree=integer(length(labels))
+  }
+  
+  if(is.null(disperse)){
+    disperse=integer(length(labels))
+  }
+  
+  for (idx in labels){
+  new.y.positions = c(new.y.positions, 
+                      repelled.y(new.label$y,
+                                 d.select = new.label$label %in% names(kept.labels[kept.labels==idx]),
+                                 k=repel.degree[idx],
+                                 addMore=disperse[idx]))
+  }
+  new.y.positions=unit(new.y.positions, "npc")
+  new.flag = segmentsGrob(x0 = new.label$x,
+                           x1 = new.label$x + unit(0.1, "npc"),
+                           y0 = new.label$y[new.label$label != ""],
+                           y1 = new.y.positions)
+
+  new.label$x = new.label$x + unit(0.15, "npc")
+  new.label$y[new.label$label != ""] = new.y.positions
+
+  heatmap = gtable::gtable_add_grob(x = heatmap,
+                                   grobs = new.flag,
+                                   t = 4, 
+                                   l = 4
+  )
+
+  heatmap$grobs[[which(heatmap$layout$name == "row_names")]] = new.label
+  return(heatmap)
+}
+
+
+set.seed(100)
+#to_decompose=binnedMatrix
+to_decompose=full_matrix
+decomp = nnmf(to_decompose , k=nmfSigNum, rel.tol = 1e-5)
+
+window=5
+step=1
+
+matrixKernSmooth=function(mat, kernSmoothDiv=25){
+kernSmoothingSigma=ncol(mat)/kernSmoothDiv
+kernSmoothedMatrix=matrix(nrow = nrow(mat), ncol=ncol(mat))
+for (idx in 1:nrow(mat)){
+  rawRow=mat[idx,]
+  kernSmoothedRow=rbind(rawRow, rawRow) %>% as.matrix(.) %>% as.im(.) %>% blur(.,sigma = kernSmoothingSigma) %>% as.matrix() %>% .[1,]
+  kernSmoothedMatrix[idx,]=kernSmoothedRow
+}
+rownames(kernSmoothedMatrix)=rownames(mat)
+colnames(kernSmoothedMatrix)=colnames(mat)
+return(kernSmoothedMatrix)
+}
+
+kernSmooth.binnedMatrix = matrixKernSmooth(binnedMatrix)
+kernSmooth.binnedMatrix = kernSmooth.binnedMatrix[order(apply(t(rollapply(t(kernSmooth.binnedMatrix), width=window, by=step, FUN=mean)), 1, which.max)),]
+kernSmooth.binnedMatrix=kernSmooth.binnedMatrix %>% .[nrow(.):1,]
+
+
+wMat_unsorted=decomp$W
+hMat_unsorted=decomp$H
+
+rownames(wMat_unsorted)=rownames(to_decompose); colnames(wMat_unsorted)=paste0("metaGene_unsorted", 1:nmfSigNum)
+colnames(hMat_unsorted)=colnames(to_decompose); rownames(hMat_unsorted)=paste0("metaGene_unsorted", 1:nmfSigNum)
+
+## Max indices of index-weighted matrix were extracted to order NMF signatures 
+metaGeneOrder = t(hMat_unsorted) %>% as.data.frame(.) %>% sapply(., function(x) (which.max(x)-which.min(x))) %>% .[rev(order(.))]
+wMat = wMat_unsorted[,names(metaGeneOrder)]
+hMat = hMat_unsorted[names(metaGeneOrder),]
+
+colnames(wMat)=paste0("metaGene_NMF", nmfSigNum:1); rownames(hMat)=paste0("metaGene_NMF", nmfSigNum:1)
+
+nmfSortedGenes=wMat  %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) which.max(x)) %>% .[rownames(kernSmooth.binnedMatrix)] %>% .[order(.)]
+wMatAssignedProp = wMat %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) x/sum(x)) %>% t(.) %>% .[names(nmfSortedGenes),]
+colnames(wMatAssignedProp)=colnames(wMat)
+
+scaled.kernSmooth.binnedMatrix = kernSmooth.binnedMatrix[names(nmfSortedGenes),] %>% t(.) %>% scale(., center=FALSE) %>% t(.)
+#scaled.kernSmooth.binnedMatrix = kernSmooth.binnedMatrix[names(nmfSortedGenes),] %>% scale(., center=FALSE)
+
+heatPal=brewer.pal(name = "RdYlBu", n=11) %>% rev(.)
+originalSpectral = colorRampPalette(heatPal)(100)[5:100]
+
+highContribGenes=c()
+#toShowRowName=c()
+toShowRowName=c("Gap43", "EGFRvIII")
+  
+wMat_assigned=wMat[names(nmfSortedGenes),] %>% as.data.frame(.) %>% mutate(assigned=nmfSortedGenes)
+for (idx in 1:nmfSigNum){
+  wMat_chunk = wMat_assigned %>% filter(assigned==idx)
+  noWeakCoefficient=wMat[rownames(wMat_chunk),] %>% .[rowMax(.)>wMatCoeffThreshold,] %>% rownames(.)
+  firstAssignProb=wMatAssignedProp[noWeakCoefficient,] %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) x[which(x==sort(x, decreasing = T)[1])][1])
+  secondAssignProb=wMatAssignedProp[noWeakCoefficient,] %>% t(.) %>% as.data.frame(.) %>% sapply(., function(x) x[which(x==sort(x, decreasing = T)[2])][1]) 
+  noSecondaryAssignment=(firstAssignProb - secondAssignProb) %>% .[.>assignProbDiff] %>% names(.)
+  topGenesperModule.unsorted=wMat_chunk[noSecondaryAssignment,] %>% arrange(desc(.[[idx]])) %>% rownames(.)
+  toShowNum=round(length(topGenesperModule.unsorted)/5, 0)
+  toShowRowName=c(toShowRowName, topGenesperModule.unsorted %>% .[!grepl("Rik$", .)] %>% .[!grepl("^Gm[0-9]", .)] %>%.[1:toShowNum] %>% .[!is.na(.)])
+  highContribGenes=c(highContribGenes, rownames(wMat_chunk) %>% .[.%in%topGenesperModule.unsorted])
+}
+
+toHeat = scaled.kernSmooth.binnedMatrix[highContribGenes,]
+#toHeat = scaled.binnedMatrix
+pheatGaps=nmfSortedGenes[highContribGenes] %>% table(.) %>% as.numeric(.) %>% cumsum(.)
+nmfWeightPlot=pheatmap::pheatmap(wMatAssignedProp %>% .[highContribGenes, ncol(.):1], 
+                                       cluster_cols = F, cluster_rows = F, row_title=NULL, legend=FALSE, show_rownames =FALSE, show_colnames = FALSE,
+                                       gaps_row = pheatGaps, border_color="white")
+pheat=pheatmap::pheatmap(toHeat,
+                         cluster_rows =F, cluster_cols = F, show_colnames = F, show_rownames = T, border_color=NA, 
+                         gaps_row = pheatGaps, row_title = NULL,annotation_legend =FALSE, annotation_names_row =FALSE,
+                         color = originalSpectral,
+                         legend_breaks = c(0.1,floor(10*max(toHeat))/10-0.1), legend_labels = c("Low", "High"))
+pheat2=add.flag(pheat, nmfSortedGenes[toShowRowName])#, repel.degree = c(0, 0, 0, 0), disperse = c(0, 0,0 0))
+
+
+cowplot::plot_grid(nmfWeightPlot[[4]],pheat2, nrow=1, rel_widths = c(1,5))
+
+top_pt_annotations = top_pt_genesDF2 %>% dplyr::select(c(Pseudotime, Time, CellType))
+#top_pt_annotations = top_pt_genesDF2 %>% dplyr::select(c(Pseudotime,  CellType))
+
+timeColor=brewer.pal(top_pt_annotations$Time %>% levels(.) %>% length(.),"RdPu")
+names(timeColor)=top_pt_annotations$Time %>% levels(.) 
+cellTypes=top_pt_annotations$CellType %>% factor(.) %>% droplevels(.) %>% levels(.)
+
+ha = HeatmapAnnotation(df=top_pt_annotations,
+                       col=list(Pseudotime=circlize::colorRamp2(c(0, max(top_pt_genesDF2$Pseudotime) %>% ceiling(.)), c("white", "blue")),
+                                Time=timeColor,
+                                CellType=newAnnotCols[cellTypes]))
+
+topAnnotPlot=Heatmap(matrix(0, nrow=2, ncol=ncol(full_matrix)), name="log2(count+1)", show_row_names = T, show_column_names = F, cluster_columns=F,
+         top_annotation=ha, show_row_dend = F, 
+         use_raster = F)
+draw(topAnnotPlot)
+
+metagene_assigned_list=list()
+for (idx in unique(nmfSortedGenes)){
+  metagene_assigned_list[[idx]]=nmfSortedGenes[highContribGenes] %>% .[.==idx] %>% names(.)
+}
+metagene_assigned_list %>% lapply(., function(x) gsub("EGFRvIII ", "", paste0(x, collapse=" ")))
+#metagene_assigned_list %>% lapply(., function(x) paste0('"', paste0(x, collapse='","'), '"')) %>% .[[1]] %>% cat(.)
+
+names(metagene_assigned_list)=colnames(wMat)
+```
+
+### Lineage line Plots
+```{r}
+require(cowplot)
+
+linPlots=list()
+colorLins=c("orange", "darkseagreen3", "blue")
+lineageLineMatrix=toHeat
+LWD=0.2
+
+if(ncol(lineageLineMatrix)%%2==1){
+  lineageLineMatrix=lineageLineMatrix %>% .[,1:(ncol(.)-1)]
+}
+
+for (xx in 1:nmfSigNum) {
+  #cId = nmfSortedGenes[nmfSortedGenes==xx] %>% names(.)
+  cId = nmfSortedGenes[highContribGenes] [nmfSortedGenes[highContribGenes] ==xx] %>% names(.)
+  p = ggplot(data = data.frame(x = 1:ncol(lineageLineMatrix),
+                                y = rep(range(lineageLineMatrix[cId, ]), ncol(lineageLineMatrix) / 2)),
+              aes(x = x, y = y)) +
+    geom_point(alpha = 0) +
+    labs(title = paste0("Cluster ", xx),  x = "Trajectory", y = "Normalized expression") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.y = element_blank())
+  for (ii in 1:length(cId)) {
+    geneId =cId[[ii]]
+    p = p +
+      geom_line(data = data.frame(x = 1:ncol(lineageLineMatrix),
+                                  y = lineageLineMatrix[geneId, ],
+                                  lineage = rep(1, each = ncol(lineageLineMatrix))),
+                aes(col = as.character(lineage), group = lineage), lwd = LWD)+
+      theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank(),
+            axis.text.x =  element_blank(), axis.text.y = element_blank())
+  }
+  p = p + guides(color = FALSE) +
+    scale_color_manual(values = colorLins[xx],
+                       breaks = c("1"))  
+  linPlots[[xx]]=p
+}
+#cowplot::plot_grid(plotlist=linPlots,ncol = 1)
+#cowplot::plot_grid(plotlist=linPlots,nrow = 1)
+
+```
+
+### Expression of Increasing genes across pseudobulk-averaged cellTypes
+```{r}
+require(Seurat); require(ggplot2); require(dplyr)
+require(ComplexHeatmap); require(RColorBrewer)
+require(grid); require(cowplot); require(circlize)
+
+min_cellNum=10
+non_normal_log_cutoff=2
+
+incGenes=unlist(metagene_assigned_list)
+
+opcRelatedness=c("EC", "Meninges", "PC", "VSMC", "Lymphocyte", "TAM", "BAM", "MG",  "Neuron", "NB", "TAC", "AC", "OL", "COP", "OPC", "pre-CC1", "CC1-A", "CC1-B1","CC1-B2", "pre-CC2", "CC2")
+opcDriven=c("OPC", "pre-CC1", "CC1", "CC1-A", "CC1-B1", "CC1-B2")
+precc2_cc2=c("pre-CC2", "CC2")
+
+normal_Cells=setdiff(opcRelatedness, c(opcDriven, precc2_cc2))
+
+obj=obj.fastmnn_finalAnnot
+assayToUse=DefaultAssay(obj)
+incGenesLogNorm=obj[[assayToUse]]@data[incGenes,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+incGenesLogNorm$cttp=interaction(obj$orig.ident, obj$celltype %>% factor(., levels = opcRelatedness), sep=":")
+
+pseudoBulkIncGenesLogNorm=incGenesLogNorm %>% group_by(cttp) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cttp")
+
+cellNums=incGenesLogNorm %>% group_by(cttp) %>% summarise(n=n()) %>% as.data.frame() %>% tibble::column_to_rownames("cttp")
+pseudoBulkIncGenesLogNorm=pseudoBulkIncGenesLogNorm[cellNums %>% filter(n>=min_cellNum) %>% rownames(.),]
+
+annot_cellType=rownames(pseudoBulkIncGenesLogNorm) %>% strsplit(":") %>% lapply(., function(x) x[[2]]) %>% unlist(.)
+annot_timePoint=rownames(pseudoBulkIncGenesLogNorm) %>% strsplit(":") %>% lapply(., function(x) x[[1]]) %>% unlist(.)
+annot_pseudoBulkIncGenesLogNorm=bind_cols(annot_cellType, annot_timePoint) %>% as.data.frame(.) %>% setNames(c("CellType", "Time"))
+rownames(annot_pseudoBulkIncGenesLogNorm)=rownames(pseudoBulkIncGenesLogNorm)
+
+opcRelSplit=annot_pseudoBulkIncGenesLogNorm %>% 
+  mutate(columnSplit=case_when(CellType %in% precc2_cc2~"Others",
+                               CellType %in% opcDriven ~"OPC-driven",
+                               TRUE~"Normal")) %>% .$columnSplit
+
+non_Normal_genes=(pseudoBulkIncGenesLogNorm[opcRelSplit=="Normal",]>non_normal_log_cutoff) %>% colSums(.) %>% .[.==0] %>% names(.)
+
+nor_Normal_genes2=c()
+for (g in non_Normal_genes){
+    maxValue=max(pseudoBulkIncGenesLogNorm[,g] )
+    maxCt=annot_pseudoBulkIncGenesLogNorm$CellType[pseudoBulkIncGenesLogNorm[,g] %>% which.max(.)]
+    if(maxCt%in%c(opcDriven) & maxValue>=non_normal_log_cutoff){
+      nor_Normal_genes2=c(nor_Normal_genes2, g)
+    }
+}
+pseudoBulkIncGenesLogNorm_non_Normal=pseudoBulkIncGenesLogNorm[,nor_Normal_genes2] %>% t(.)
+
+
+timeColor=brewer.pal(obj$orig.ident %>% levels(.) %>% length(.),"RdPu")
+names(timeColor)=obj$orig.ident %>% levels(.) 
+
+haPB = HeatmapAnnotation(df=annot_pseudoBulkIncGenesLogNorm,
+                       col=list(Time=timeColor,
+                                CellType=newAnnotCols))
+
+metagene_assigned_df=metagene_assigned_list %>% reshape2::melt() %>% setNames(c("gene", "module"))
+rowAnnotDF=rownames(pseudoBulkIncGenesLogNorm_non_Normal) %>% as.data.frame() %>% setNames("gene") %>% merge(x=., y=metagene_assigned_df, by.x="gene")
+rownames(rowAnnotDF)=rowAnnotDF$gene
+rowAnnotDF=rowAnnotDF[metagene_assigned_df$gene %>% .[.%in%rowAnnotDF$gene],] %>% select(-gene)
+
+moduleCol=brewer.pal("PuBu", n=nmfSigNum)
+names(moduleCol)=metagene_assigned_df$module %>% unique(.) %>% .[order(.)]
+rowPB = rowAnnotation(df=rowAnnotDF, col=list("module"=moduleCol))
+
+hPB=Heatmap(pseudoBulkIncGenesLogNorm_non_Normal[rownames(rowAnnotDF),], name="Pseudobulk\nlog2(count+1)", show_row_names = T, show_column_names = F, cluster_columns=F, cluster_rows=F,
+        top_annotation=haPB, left_annotation=rowPB, column_split=opcRelSplit,
+        col= circlize::colorRamp2(c(0,1,2), c("lightgreen", "white","#cf1100"), space="sRGB"))
+
+draw(hPB)
+
+print(colnames(pseudoBulkIncGenesLogNorm_non_Normal)[row_order(hPB)] %>% paste(., collapse=", "))
+```
+
+##PAG-UEG
+```{r}
+require(Seurat); require(ggplot2); require(dplyr)
+require(ComplexHeatmap); require(RColorBrewer)
+require(grid); require(cowplot); require(circlize)
+
+min_cellNum=10
+non_normal_log_cutoff=2
+
+incGenes=c("Gap43", "Matn4", "Col11a1", "Cntn1", "Ccnd1")
+
+opcRelatedness=c("EC", "Meninges", "PC", "VSMC", "Lymphocyte", "TAM", "BAM", "MG",  "Neuron", "NB", "TAC", "AC", "OL", "COP", "OPC", "pre-CC1", "CC1-A", "CC1-B1","CC1-B2", "pre-CC2", "CC2")
+opcDriven=c("OPC", "pre-CC1", "CC1", "CC1-A", "CC1-B1", "CC1-B2")
+precc2_cc2=c("pre-CC2", "CC2")
+
+normal_Cells=setdiff(opcRelatedness, c(opcDriven, precc2_cc2))
+
+obj=obj.fastmnn_finalAnnot
+assayToUse=DefaultAssay(obj)
+incGenesLogNorm=obj[[assayToUse]]@data[incGenes,] %>% as.matrix() %>% t(.) %>% as.data.frame()
+incGenesLogNorm$cttp=interaction(obj$orig.ident, obj$celltype %>% factor(., levels = opcRelatedness), sep=":")
+
+pseudoBulkIncGenesLogNorm=incGenesLogNorm %>% group_by(cttp) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% as.data.frame() %>% tibble::column_to_rownames("cttp")
+
+cellNums=incGenesLogNorm %>% group_by(cttp) %>% summarise(n=n()) %>% as.data.frame() %>% tibble::column_to_rownames("cttp")
+pseudoBulkIncGenesLogNorm=pseudoBulkIncGenesLogNorm[cellNums %>% filter(n>=min_cellNum) %>% rownames(.),]
+
+annot_cellType=rownames(pseudoBulkIncGenesLogNorm) %>% strsplit(":") %>% lapply(., function(x) x[[2]]) %>% unlist(.)
+annot_timePoint=rownames(pseudoBulkIncGenesLogNorm) %>% strsplit(":") %>% lapply(., function(x) x[[1]]) %>% unlist(.)
+annot_pseudoBulkIncGenesLogNorm=bind_cols(annot_cellType, annot_timePoint) %>% as.data.frame(.) %>% setNames(c("CellType", "Time"))
+rownames(annot_pseudoBulkIncGenesLogNorm)=rownames(pseudoBulkIncGenesLogNorm)
+
+opcRelSplit=annot_pseudoBulkIncGenesLogNorm %>% 
+  mutate(columnSplit=case_when(CellType %in% precc2_cc2~"Others",
+                               CellType %in% opcDriven ~"OPC-driven",
+                               TRUE~"Normal")) %>% .$columnSplit
+
+non_Normal_genes=(pseudoBulkIncGenesLogNorm[opcRelSplit=="Normal",]>non_normal_log_cutoff) %>% colSums(.) %>% .[.==0] %>% names(.)
+
+nor_Normal_genes2=c()
+for (g in non_Normal_genes){
+    maxValue=max(pseudoBulkIncGenesLogNorm[,g] )
+    maxCt=annot_pseudoBulkIncGenesLogNorm$CellType[pseudoBulkIncGenesLogNorm[,g] %>% which.max(.)]
+    if(maxCt%in%c(opcDriven) & maxValue>=non_normal_log_cutoff){
+      nor_Normal_genes2=c(nor_Normal_genes2, g)
+    }
+}
+pseudoBulkIncGenesLogNorm_non_Normal=pseudoBulkIncGenesLogNorm[,nor_Normal_genes2] %>% t(.)
+
+
+timeColor=brewer.pal(obj$orig.ident %>% levels(.) %>% length(.),"RdPu")
+names(timeColor)=obj$orig.ident %>% levels(.) 
+
+haPB = HeatmapAnnotation(df=annot_pseudoBulkIncGenesLogNorm,
+                       col=list(Time=timeColor,
+                                CellType=newAnnotCols))
+
+
+
+
+hPB=Heatmap(pseudoBulkIncGenesLogNorm_non_Normal, name="Pseudobulk\nlog2(count+1)", show_row_names = T, show_column_names = F, cluster_columns=F, cluster_rows=F,
+        top_annotation=haPB, column_split=opcRelSplit,
+        col= circlize::colorRamp2(c(0,1,2), c("lightgreen", "white","#cf1100"), space="sRGB"))
+
+draw(hPB)
+
+print(colnames(pseudoBulkIncGenesLogNorm_non_Normal)[row_order(hPB)] %>% paste(., collapse=", "))
+
+
+
+p1=obj.fastmnn_finalAnnot %>% DimPlot(., label=F, cols=c(newCancerCols, off_cols))+NoLegend()+NoAxes()
+p2=obj.fastmnn_finalAnnot %>% FeaturePlot(., "Gap43")+NoLegend()+NoAxes()
+p3=obj.fastmnn_finalAnnot %>% FeaturePlot(., "Matn4")+NoLegend()+NoAxes()
+p4=obj.fastmnn_finalAnnot %>% FeaturePlot(., "Col11a1")+NoLegend()+NoAxes()
+p5=obj.fastmnn_finalAnnot %>% FeaturePlot(., "Cntn1")+NoLegend()+NoAxes()
+p6=obj.fastmnn_finalAnnot %>% FeaturePlot(., "Ccnd1")+NoLegend()+NoAxes()
+
+cowplot::plot_grid(p1,p2,p3,p4,p5,p6, nrow=2)
+```

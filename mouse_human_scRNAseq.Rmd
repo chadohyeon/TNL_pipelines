@@ -1,0 +1,1141 @@
+---
+title: "mouse_human_scRNAseq"
+author: "DohyeonCha"
+date: '2021 2 25 '
+output: html_document
+---
+
+### Color mapping
+```{r}
+cancerCols=c("pre-CC1"= '#F8766D', "CC1"= '#D89000', "CC2"='#A3A500', "CC3"= '#39B600', "CC4"='#00BF7D', 
+             "CC5"='#00BFC4',  "CC6"= '#00B0F6', "pre-CC2"='#9590FF', "CC7"= '#E76BF3', "CC8"='#FF62BC')
+newCancerCols=c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1-A"='#cf9c63', "CC2"= '#de7b37', "CC1-B1"='#d1c630', 
+             "CC1-B2"='#8FAA00')
+on_cols = c("AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#07753b',"OPC"= '#85c9f2',  "COP"=  '#1095e6', "OL"='#2f3bbd', "EC"='#9b4db8', "PC"= '#e06360', "VSMC"='#f2a274', "BAM"='#f5bfd0', "MG"='#d1889f', "TAM"= '#ad4565', "Meninges"='#63110b', "Lymphocyte"="#ff3874")
+newAnnotCols=c(newCancerCols, on_cols)
+untransferCol=c(newAnnotCols, "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+off_cols = c("AC"=  '#dbdbd9', "TAC"= '#dbdbd9', "NB"=  '#dbdbd9', "Neuron"= '#dbdbd9', "OPC"= '#dbdbd9',  
+             "COP"=  '#dbdbd9', "OL"='#dbdbd9',  "EPC"= '#dbdbd9', "EC"='#dbdbd9', "PC"= '#dbdbd9', "VSMC"='#dbdbd9', 
+             "BAM"='#dbdbd9', "MG"='#dbdbd9', "TAM"= '#dbdbd9', "Meninges"='#dbdbd9',  "Lymphocyte"="#dbdbd9")
+
+```
+
+```{r}
+transferLatentSpace=function(query_obj, ref_obj, nDim=30, latentSpace="pca", k.weights=50){
+  require(Seurat); require(dplyr)
+  if(unique(dim(Loadings(ref_obj[[latentSpace]]))==0)){
+    ref_obj[[latentSpace]]@feature.loadings=(ref_obj[[ref_obj[[latentSpace]]@assay.used]]@scale.data) %*% MASS::ginv(t(ref_obj[[latentSpace]]@cell.embeddings))
+    colnames(ref_obj[[latentSpace]]@feature.loadings)=colnames(ref_obj[[latentSpace]]@cell.embeddings)
+  }
+  transfer.anchors = FindTransferAnchors(reference = ref_obj, query = query_obj, dims = 1:nDim, reference.reduction = latentSpace)
+  
+  k.weights=min(k.weights, nrow(transfer.anchors@anchors))
+  query_obj@tools$Integration=NULL
+  for (k in k.weights:1){
+    try_predictions = try(TransferData(anchorset = transfer.anchors, refdata = ref_obj$celltype, dims = 1:nDim, k.weight = k), silent=TRUE)
+    if(mode(try_predictions)=="character"){
+      print(paste0("k.weight=",k," has failed. Automatically lowering it."))
+    }else if(mode(try_predictions)=="list"){
+      print(paste0("k.weight=",k," was successful for transfer"))
+      predictions=try_predictions
+      break
+    }
+  }
+  #predictions = TransferData(anchorset = transfer.anchors, refdata = ref_obj$celltype, dims = 1:nDim, k.weight = k.weights)
+  query_obj$celltype_prev=query_obj$celltype
+  query_obj$celltype=predictions[["predicted.id"]]
+  resList=list(query_obj, ref_obj)
+  names(resList)=c("query", "ref")
+  return(resList)
+}
+```
+### Read CCA-transfered Human and mouse data
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/cca_transfer/")
+suffix="newMerged_hart_opcRoot_ol.rds"
+
+mouse_obj=readRDS(paste0("cca_sct_Trans_mouse_",suffix))
+human_obj=readRDS(paste0("cca_sct_Trans_human_",suffix))
+
+mouse_obj %>% DimPlot(., group.by = "celltype", label=T)
+human_obj %>% DimPlot(., group.by = "celltype", label=T)
+```
+
+### SCTransform -> CCA of species -> reducedMNN (Cells=OL, OPC, COP, pre-CC1, CC1-A, CC1-B1, CC1-B2 / human OPC cells, human Tumor Cells, human OL)
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom_noCOP/")
+
+obj=readRDS("seurat_cca_SCT_mnn_newMerged_hart_opcRoot.rds")
+
+obj %>% DimPlot(., group.by="celltype", label=T)
+obj %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+obj.list=SplitObject(obj, "species")
+
+mus_obj = obj.list[["mouse"]]
+hom_obj = obj.list[["human"]]
+remove(obj.list)
+resList=transferLatentSpace(query_obj = hom_obj, ref_obj = mus_obj, latentSpace = "reducedmnn")
+
+resList[["ref"]] %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+resList[["query"]] %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+```
+
+### Read iNMF-transfered Human and mouse data
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom/")
+
+obj=readRDS("inmf_newMerged_hart_opcRoot_ol.rds")
+#obj=readRDS("cca_SCT_mnn.neural.rds")
+
+obj %>% DimPlot(., group.by="celltype", label=T)
+obj %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+obj.list=SplitObject(obj, "species")
+
+mus_obj = obj.list[["mouse"]]
+hom_obj = obj.list[["human"]]
+remove(obj.list)
+resList=transferLatentSpace(query_obj = hom_obj, ref_obj = mus_obj, latentSpace = "iNMF")
+
+resList[["ref"]] %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+resList[["query"]] %>% DimPlot(., split.by = "species", group.by="celltype", label=T)
+```
+
+### prep for human-mouse integration
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom_noCOP/")
+opcRootCells=c("OPC", "pre-CC1", "CC1-A", "CC1-B1", "CC1-B2", "human_OPC_1", "human_OPC_2", "human_OPC_3", "human_Tumor_cells")
+opcRootCells_CC2=c(opcRootCells, "pre-CC2", "CC2")
+opcRootCells_OL=c(opcRootCells, "OL", "human_OL")
+opcRootCells_OL_CC2=c(opcRootCells, "OL", "human_OL", "pre-CC2", "CC2")
+#include_AC=c(opcRootCells_OL_CC2, "AC", "human_AC")
+#include_neuron=c(include_AC, "Neuron", "human_Neuron")
+#allNeural=c(include_neuron, "NB", "TAC")
+
+newMerged_hart_opcRoot = newMerged_hart %>% subset(., subset=celltype%in%opcRootCells)
+newMerged_hart_opcRoot_cc2 = newMerged_hart %>% subset(., subset=celltype%in%opcRootCells_CC2)
+newMerged_hart_opcRoot_ol =newMerged_hart %>% subset(., subset=celltype%in%opcRootCells_OL)
+newMerged_hart_opcRoot_ol_cc2 = newMerged_hart %>% subset(., subset=celltype%in%opcRootCells_OL_CC2)
+#newMerged_hart_ac_olig = newMerged_hart %>% subset(., subset=celltype%in%include_AC)
+#newMerged_hart_neuron_ac_olig = newMerged_hart %>% subset(., subset=celltype%in%include_neuron)
+#newMerged_hart_neural = newMerged_hart %>% subset(., subset=celltype%in%allNeural)
+
+newMerged_hart_opcRoot %>% saveRDS(., paste0("newMerged_hart_opcRoot", ".rds"))
+newMerged_hart_opcRoot_cc2 %>% saveRDS(., paste0("newMerged_hart_opcRoot_cc2", ".rds"))
+newMerged_hart_opcRoot_ol %>% saveRDS(., paste0("newMerged_hart_opcRoot_ol", ".rds"))
+newMerged_hart_opcRoot_ol_cc2 %>% saveRDS(., paste0("newMerged_hart_opcRoot_ol_cc2", ".rds"))
+#newMerged_hart_ac_olig %>% saveRDS(., paste0("newMerged_hart_ac_olig", ".rds"))
+#newMerged_hart_neuron_ac_olig %>% saveRDS(., paste0("newMerged_hart_neuron_ac_olig", ".rds"))
+#newMerged_hart_neural %>% saveRDS(., paste0("newMerged_hart_neural", ".rds"))
+```
+
+### MNN on logNorm-CCA
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom")
+cca_logNorm_opcRoot=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_opcRoot", ".rds"))
+cca_logNorm_opcRoot_cc2=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_opcRoot_cc2", ".rds"))
+cca_logNorm_opcRoot_ol=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_opcRoot_ol", ".rds"))
+cca_logNorm_opcRoot_ol_cc2=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_opcRoot_ol_cc2", ".rds"))
+cca_logNorm_ac_olig=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_ac_olig", ".rds"))
+#cca_logNorm_neuron_ac_olig=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_neuron_ac_olig", ".rds"))
+#cca_logNorm_neural=readRDS(paste0("seurat_cca_logNorm_newMerged_hart_neural", ".rds"))
+cca_logNorm_all=readRDS(paste0("seurat_cca_logNorm_newMerged_hart", ".rds"))
+
+cca_logNorm_mnn.opcRoot=cca_logNorm_opcRoot %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_logNorm_mnn.opcRoot_cc2=cca_logNorm_opcRoot_cc2 %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_logNorm_mnn.opcRoot_ol=cca_logNorm_opcRoot_ol %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_logNorm_mnn.opcRoot_ol_cc2=cca_logNorm_opcRoot_ol_cc2 %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_logNorm_mnn.ac_olig=cca_logNorm_ac_olig %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+#cca_logNorm_mnn.neuron_ac_olig=cca_logNorm_neuron_ac_olig %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+#cca_logNorm_mnn.neural=cca_logNorm_neural %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_logNorm_mnn.all=cca_logNorm_all %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+```
+
+### MNN on SCT-CCA
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom")
+cca_SCT_opcRoot=readRDS(paste0("seurat_cca_SCT_newMerged_hart_opcRoot", ".rds"))
+cca_SCT_opcRoot_cc2=readRDS(paste0("seurat_cca_SCT_newMerged_hart_opcRoot_cc2", ".rds"))
+cca_SCT_opcRoot_ol=readRDS(paste0("seurat_cca_SCT_newMerged_hart_opcRoot_ol", ".rds"))
+cca_SCT_opcRoot_ol_cc2=readRDS(paste0("seurat_cca_SCT_newMerged_hart_opcRoot_ol_cc2", ".rds"))
+cca_SCT_ac_olig=readRDS(paste0("seurat_cca_SCT_newMerged_hart_ac_olig", ".rds"))
+#cca_SCT_neuron_ac_olig=readRDS(paste0("seurat_cca_SCT_newMerged_hart_neuron_ac_olig", ".rds"))
+#cca_SCT_neural=readRDS(paste0("seurat_cca_SCT_newMerged_hart_neural", ".rds"))
+cca_SCT_all=readRDS(paste0("seurat_cca_SCT_newMerged_hart", ".rds"))
+
+cca_SCT_mnn.opcRoot=cca_SCT_opcRoot %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_SCT_mnn.opcRoot_cc2=cca_SCT_opcRoot_cc2 %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_SCT_mnn.opcRoot_ol=cca_SCT_opcRoot_ol %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_SCT_mnn.opcRoot_ol_cc2=cca_SCT_opcRoot_ol_cc2 %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_SCT_mnn.ac_olig=cca_SCT_ac_olig %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+#cca_SCT_mnn.neuron_ac_olig=cca_SCT_neuron_ac_olig %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+#cca_SCT_mnn.neural=cca_SCT_neural %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+cca_SCT_mnn.all=cca_SCT_all %>% reducedMNN_seurat(., nDim=30, reduction="pca", anchorFeature = "batch")
+```
+
+```{r}
+setwd("/home/dcha/02.glioblastoma_scRNAseq/rdata/musHom")
+cca_SCT_mnn.opcRoot %>% saveRDS(., paste0("cca_SCT_mnn.opcRoot", ".rds"))
+cca_SCT_mnn.opcRoot_cc2 %>% saveRDS(., paste0("cca_SCT_mnn.opcRoot_cc2", ".rds"))
+cca_SCT_mnn.opcRoot_ol %>% saveRDS(., paste0("cca_SCT_mnn.opcRoot_ol", ".rds"))
+cca_SCT_mnn.opcRoot_ol_cc2 %>% saveRDS(., paste0("cca_SCT_mnn.opcRoot_ol_cc2", ".rds"))
+cca_SCT_mnn.ac_olig %>% saveRDS(., paste0("cca_SCT_mnn.ac_olig", ".rds"))
+#cca_SCT_mnn.neuron_ac_olig %>% saveRDS(., paste0("cca_SCT_mnn.neuron_ac_olig", ".rds"))
+#cca_SCT_mnn.neural %>% saveRDS(., paste0("cca_SCT_mnn.neural", ".rds"))
+cca_SCT_mnn.all %>% saveRDS(., paste0("cca_SCT_mnn.all", ".rds"))
+
+cca_logNorm_mnn.opcRoot %>% saveRDS(., paste0("cca_logNorm_mnn.opcRoot", ".rds"))
+cca_logNorm_mnn.opcRoot_cc2 %>% saveRDS(., paste0("cca_logNorm_mnn.opcRoot_cc2", ".rds"))
+cca_logNorm_mnn.opcRoot_ol %>% saveRDS(., paste0("cca_logNorm_mnn.opcRoot_ol", ".rds"))
+cca_logNorm_mnn.opcRoot_ol_cc2 %>% saveRDS(., paste0("cca_logNorm_mnn.opcRoot_ol_cc2", ".rds"))
+cca_logNorm_mnn.ac_olig %>% saveRDS(., paste0("cca_logNorm_mnn.ac_olig", ".rds"))
+#cca_logNorm_mnn.neuron_ac_olig %>% saveRDS(., paste0("cca_logNorm_mnn.neuron_ac_olig", ".rds"))
+#cca_logNorm_mnn.neural %>% saveRDS(., paste0("cca_logNorm_mnn.neural", ".rds"))
+cca_logNorm_mnn.all %>% saveRDS(., paste0("cca_logNorm_mnn.all", ".rds"))
+```
+
+###more Clusters
+```{r}
+#musHom.harmony_by_subjects_res1.2 = musHom.harmony_by_subjects %>% Seurat::FindClusters(., resolution=1.2)
+#musHom.harmony_by_subjects_res1.5 = musHom.harmony_by_subjects %>% Seurat::FindClusters(., resolution=1.5)
+#musHom.harmony_by_subjects_res2.0 = musHom.harmony_by_subjects %>% Seurat::FindClusters(., resolution=2.0)
+
+#musHom.logNormCCA_by_subjects_res1.2 = musHom.logNormCCA_by_subjects %>% Seurat::FindClusters(., resolution=1.2)
+#musHom.logNormCCA_by_subjects_res1.5 = musHom.logNormCCA_by_subjects %>% Seurat::FindClusters(., resolution=1.5)
+#musHom.logNormCCA_by_subjects_res2.0 = musHom.logNormCCA_by_subjects %>% Seurat::FindClusters(., resolution=2.0)
+musHom.logNormCCA_by_subjects_res3.0 = musHom.logNormCCA_by_subjects %>% Seurat::FindClusters(., resolution=3.0)
+
+p1 = musHom.logNormCCA_by_subjects_res1.5 %>% DimPlot(., label=T) + NoLegend()
+p2 = musHom.logNormCCA_by_subjects_res1.5 %>% DimPlot(., group.by="celltype", label=T, cols=my_cols, split.by="species") + NoLegend()
+p1+p2
+```
+
+### R.Hart, bioRxiv, 17,629 gene lists
+```{r}
+setwd("~/02.glioblastoma_scRNAseq/mouse_human_integration")
+
+humanGenesRaw=gbm_merge@assays$RNA@counts %>% rownames(.)
+mouseGenesRaw=obj.fastmnn_newAnnot@assays$RNA@counts %>% rownames(.)
+
+hartHomoloGenes=read.csv("geneTrans.txt", header=T) %>% dplyr::select(c("Human.Symbol", "Mouse.Symbol"))
+
+humanHartGenes=intersect(hartHomoloGenes$Human.Symbol, humanGenesRaw)
+mouseHartGenes=intersect(hartHomoloGenes$Mouse.Symbol, mouseGenesRaw) %>% as.data.frame() %>% setNames("Mouse.Symbol")
+mouseHomHartGenes=merge(x=mouseHartGenes, y=hartHomoloGenes, by.x = "Mouse.Symbol")
+hart.ooo.genes=intersect(mouseHomHartGenes$Human.Symbol, humanHartGenes) %>% as.data.frame() %>% setNames("Human.Symbol") %>% merge(x=., y=hartHomoloGenes, by.x="Human.Symbol") %>% setNames(c("human", "mouse"))
+```
+
+### Merging mouse-human Seurat.obj using one-on-one genes
+```{r}
+require(dplyr); require(tibble)
+
+mouse.sharedGenes.matrix = (obj.fastmnn_newAnnot@assays$RNA@counts)[hart.ooo.genes$mouse,]
+rownames(mouse.sharedGenes.matrix) = hart.ooo.genes$human
+mouseShared_hart = CreateSeuratObject(counts=mouse.sharedGenes.matrix, project="mouseShared_hart") 
+mouseMeta = obj.fastmnn_newAnnot@meta.data[, c("orig.ident","orig.ident", "batch", "celltype")] %>% setNames(c("orig.ident","subjects", "batch", "celltype")) %>% mutate(prev_clusters="99") %>% mutate(species="mouse")
+mouseShared_hart <- AddMetaData(object = mouseShared_hart, metadata = mouseMeta) 
+
+
+human.sharedGenes.matrix = (gbm_merge@assays$RNA@counts)[hart.ooo.genes$human,]
+humanShared_hart = CreateSeuratObject(counts=human.sharedGenes.matrix, project="humanShared_hart") 
+humanMeta = gbm_merge@meta.data[,c("orig.ident","orig.ident","orig.ident","orig.ident", "seurat_clusters")] %>% setNames(c("orig.ident","subjects","batch","celltype", "prev_clusters")) %>% mutate(species="human")
+humanShared_hart = AddMetaData(object = humanShared_hart, metadata = humanMeta)
+
+humanShared_hart$subjects = humanShared_hart$subjects %>% strsplit(., split="-R") %>% lapply(., function(x) x[[2]]) %>% as.character() %>% paste0("human_R",.)
+humanShared_hart$celltype = humanShared_hart$celltype %>% strsplit(., split="-R") %>% lapply(., function(x) x[[1]]) %>% as.character() %>% replace(., .=="SVZ", "humanSVZCells") %>% replace(., .=="TU", "humanTumorCells")
+
+```
+
+### Color mapping
+```{r}
+cancerCols=c("pre-CC1"= '#F8766D', "CC1"= '#D89000', "CC2"='#A3A500', "CC3"= '#39B600', "CC4"='#00BF7D', 
+             "CC5"='#00BFC4',  "CC6"= '#00B0F6', "pre-CC2"='#9590FF', "CC7"= '#E76BF3', "CC8"='#FF62BC')
+newCancerCols=c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1-A"='#cf9c63', "CC2"= '#de7b37', "CC1-B1"='#d1c630', 
+             "CC1-B2"='#8FAA00')
+on_cols = c("AC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#07753b',"OPC"= '#85c9f2',  "COP"=  '#1095e6', "OL"='#2f3bbd', "EC"='#9b4db8', "PC"= '#e06360', "VSMC"='#f2a274', "BAM"='#f5bfd0', "MG"='#d1889f', "TAM"= '#ad4565', "Meninges"='#63110b', "Lymphocyte"="#ff3874")
+newAnnotCols=c(newCancerCols, on_cols)
+
+off_cols = c("AC"=  '#dbdbd9', "TAC"= '#dbdbd9', "NB"=  '#dbdbd9', "Neuron"= '#dbdbd9', "OPC"= '#dbdbd9',  
+             "COP"=  '#dbdbd9', "OL"='#dbdbd9',  "EPC"= '#dbdbd9', "EC"='#dbdbd9', "PC"= '#dbdbd9', "VSMC"='#dbdbd9', 
+             "BAM"='#dbdbd9', "MG"='#dbdbd9', "TAM"= '#dbdbd9', "Meninges"='#dbdbd9',  "Lymphocyte"="#dbdbd9")
+
+
+
+ligerUntransferCol=c(newAnnotCols, "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+```
+
+### LIGER cross-species
+```{r}
+require(rliger); require(Seurat); require(SeuratWrappers)
+toLiger="batch"
+merged_human_mouse = merge(x=humanShared_hart, y=mouseShared_hart)
+merged_human_mouse = merged_human_mouse %>% NormalizeData(.) %>% FindVariableFeatures(.) %>%  
+  ScaleData(., split.by = toLiger, do.center = FALSE) %>% 
+  RunOptimizeALS(., k=20, lambda=5, split.by = toLiger) %>%
+  RunQuantileNorm(., split.by=toLiger)
+
+merged_human_mouse = merged_human_mouse %>% RunUMAP(., dims = 1:ncol(.[["iNMF"]]), reduction = "iNMF")
+```
+
+### LIGER results
+```{r}
+liger_mouse_k30=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/obj_k30_liger_batch.rds")
+liger_mouse_k20=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/obj_k20_liger_batch.rds")
+
+#liger_species = readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/liger_species.rds")
+#liger_species_human = liger_species %>% subset(., subset=species=="human")
+#liger_species_mouse = liger_species %>% subset(., subset=species=="mouse")
+liger_mouse_k30 %>% DimPlot(., group.by="celltype", cols=newAnnotCols, label=T)
+```
+
+### Label transfer
+```{r}
+nDim=20
+musHom.anchors = FindTransferAnchors(reference = liger_species_mouse, query = liger_species_human, dims = 1:nDim)
+musHom.predictions = TransferData(anchorset = musHom.anchors, refdata = liger_species_mouse$celltype,dims = 1:nDim)
+liger_species_human = liger_species_human %>% AddMetaData(., metadata = musHom.predictions)
+#cmt.query2$prediction.match = cmt.query2$predicted.id == cmt.query2$celltype
+#table(cmt.query2$prediction.match)
+#table(cmt.query2$predicted.id)
+
+```
+
+
+### Prep mouse and human data
+```{r}
+#obj=readRDS("/home/dcha/02.glioblastoma_scRNAseq/rdata/merged_hart.rds")
+#mousePart=obj %>% subset(., subset=species=="mouse")
+#humanPart=obj %>% subset(., subset=species=="human")
+```
+
+
+### transfer reference UMAP data
+```{r}
+toCFIT="batch"
+
+cFitOut=readRDS(paste0("/home/dcha/02.glioblastoma_scRNAseq/rdata/cfit_", toCFIT, ".rds"))
+int.out=cFitOut$int.out
+exprs.list=cFitOut$exprs.list
+data.list=cFitOut$data.list
+tf.out=cFitOut$tf.out
+
+mouseTerms=obj@meta.data %>% filter(species=="mouse") %>% .[[toCFIT]] %>% unique(.)
+humanTerms=obj@meta.data %>% filter(species=="human") %>% .[[toCFIT]] %>% unique(.)
+
+ref.data=which(names(exprs.list) %in% mouseTerms)
+query.data=which(names(exprs.list) %in% humanTerms)
+
+remove(cFitOut)
+
+Hnorm = do.call(rbind, int.out$H.list) %*% diag(colSums(int.out$W))
+
+celltype = do.call(c, data.list$labels.list[ref.data])
+
+umap.ref = plot_umap(X=Hnorm, labels=celltype, 
+                     pca = NULL, n_components = 2, n_neighbors = 50, min_dist = 0.1, # umap parameters
+                     point.size = 0.6, alpha=0.8, title=NULL, legend.name='cell type', # figure parameters
+                     seed=42)
+query.norm = rbind(do.call(rbind, int.out$H.list), tf.out$H) %*% diag(colSums(int.out$W))
+source = rep(c('reference','target'), c(nrow(do.call(rbind, int.out$H.list)), nrow(tf.out$H)))
+umap.query= plot_umap(X=query.norm, labels=source, min_dist = 0.1, # umap parameters
+                     point.size = 0.6, alpha=0.8, title=NULL, legend.name='source', 
+                     cols=c('grey80','red'), seed=0)
+
+mouse.cfitUmapEmb = umap.ref$emb
+rownames(mouse.cfitUmapEmb)=rownames(Hnorm)
+
+mousePart[["cfit_umap"]] = CreateDimReducObject(embeddings = mouse.cfitUmapEmb, key = "UMAP_", assay = DefaultAssay(mousePart))
+
+whole.cfitUmapEmb = umap.query$emb
+rownames(whole.cfitUmapEmb)=rownames(query.norm)
+
+obj[["cfit_umap"]] = CreateDimReducObject(embeddings = whole.cfitUmapEmb, key = "UMAP_", assay = DefaultAssay(obj))
+
+transferedCelltype=humanPart$celltype %>% as.data.frame(.) %>% bind_cols(., est.labels) %>% setNames(c("unlabeled", "labeled")) %>% mutate(celltype=case_when(is.na(labeled)~unlabeled, TRUE~labeled)) %>% .[["celltype"]]
+obj@meta.data$celltype = c(transferedCelltype, mousePart@meta.data$celltype)
+labelledCells=obj$celltype %>% .[!(.%in% c("humanSVZCells", "humanTumorCells"))] %>% names(.)
+cfitMerged=obj %>% subset(., cells=labelledCells)
+
+cfitMerged %>% DimPlot(., label=T, group.by="celltype", cols=newAnnotCols, split.by="species")+NoLegend()+NoAxes()
+```
+
+### transfer mouse celltypes to human
+```{r}
+tf.out = CFITTransfer(Xtarget=exprs.list[[query.data]], Wref=int.out$W, max.niter = 100, seed=0, verbose=F)
+query_norm = rbind(do.call(rbind, int.out$H.list), tf.out$H) %*% diag(colSums(int.out$W))
+query_source = rep(c('reference','target'), c(nrow(do.call(rbind, int.out$H.list)), nrow(tf.out$H)))
+celltype = do.call(c, c(data.list$labels.list[ref.data],data.list$labels.list[4]))
+
+umap.out = plot_umap(X=query_norm, labels=source, min_dist = 0.1, # umap parameters
+                     point.size = 0.6, alpha=0.8, title=NULL, legend.name='source', 
+                     cols=c('grey80','red'), seed=0)
+```
+
+### Merged(N=3) human Tumor+SVZ Seurat obj
+```{r}
+require(dplyr); require(tibble)
+require(Seurat)
+setwd("~/02.glioblastoma_scRNAseq/mouse_human_integration")
+
+#load("/home/dcha/glioblastoma/rdata/gbm_merge.RData")
+#load("/home/dcha/glioblastoma/rdata/obj_final.RData")
+
+humanGenesRaw=gbm_merge@assays$RNA@counts %>% rownames(.)
+humanGenesRaw %>% as.data.frame() %>% write.table(., file="humanGenes.txt", quote=F, sep="\t", row.names=F, col.names=F)
+mouseGenesRaw=obj.final@assays$RNA@counts %>% rownames(.)
+mouseGenesRaw %>% as.data.frame() %>% write.table(., file="mouseGenes.txt", quote=F, sep="\t", row.names=F, col.names=F)
+
+humanGenes = read.table("hom2mus.humanGenes.count.txt", sep="\t", header=T)
+mouseGenes = read.table("mus2hom.mouseGenes.count.txt", sep="\t", header=T)
+
+ooo.genes=humanGenes %>% filter(mouse!="NA") %>% filter(description==".") %>% filter(human %in% humanGenesRaw) %>% filter(human %in% mouseGenes$human) %>% filter(mouse %in% mouseGenesRaw) %>%  filter(mouse %in% humanGenes$mouse)
+```
+
+### Multi-mapped orthologs -> count evaluation (Human)
+```{r}
+require(ggplot2)
+
+check_geneCounts = function(obj, gene){
+  geneCounts = obj@assays$RNA@counts[gene,]
+  print(gene)
+  #geneCounts %>% unique(.) %>% sort(.) %>% table(.) %>% print(.)
+  geneCounts %>% table(.) %>% print(.)
+  
+  print(paste0("meanExpression of ", gene))
+  geneCounts %>% mean(.) %>% print(.)
+  
+  hist=geneCounts %>% as.data.frame() %>% setNames("counts") %>% ggplot(., aes(x=counts))+geom_histogram()+ggtitle(gene)
+  print(hist)
+}
+
+wrapup.ks = function(obj, gene1, gene2){
+  check_geneCounts(obj, gene1)
+  check_geneCounts(obj, gene2)
+  ks.test(obj@assays$RNA@counts[gene1,],
+        obj@assays$RNA@counts[gene2,]) %>% print(.)
+}
+
+
+
+wrapup.ks(obj.final, "Acot9", "Acot10")
+#wrapup.ks(gbm_merge, "FCGR3A", "FCGR3B")
+
+#check_geneCounts(obj.final, "Gm14391")
+
+#check_geneCounts(gbm_merge, "NXF2B")
+#check_geneCounts(gbm_merge, "NXF2")
+#check_geneCounts(gbm_merge, "F8A3")
+
+
+#ks.test(obj.final@assays$RNA@counts["Mfap1a",],
+#        obj.final@assays$RNA@counts["Mfap1b",])
+
+#ks.test(gbm_merge@assays$RNA@counts["FCGR3A",],
+#        gbm_merge@assays$RNA@counts["FCGR3B",])
+```
+
+
+
+### CellCycleGenes Preparation
+```{r}
+cellCycleGenes=function(species="human"){
+  require(AnnotationHub); require(ensembldb); require(dplyr)
+  ah = AnnotationHub()
+  if (species=="human"){
+    cell_cycle_genes <- read.csv("/home/public/ref/00_Ref_GRCh38/annot/human.cellCycleGenes.hbc.tinyatlas.csv")
+    ahDb = query(ah, pattern = c("Homo sapiens", "EnsDb"), ignore.case = TRUE)
+  }else if (species=="mouse"){
+    cell_cycle_genes <- read.csv("/home/public/ref/00_Ref_mm10/annot/mouse.cellCycleGenes.hbc.tinyatlas.csv")
+    ahDb = query(ah, pattern = c("Mus musculus", "EnsDb"), ignore.case = TRUE)
+  }
+  
+  print("Acquire the latest annotation files")
+  id = ahDb %>% mcols() %>% rownames() %>% tail(1)
+  
+  print("Download the appropriate Ensembldb database")
+  edb <- ah[[id]]
+  
+  print("Extract gene-level information from database")
+  annotations <- genes(edb,return.type = "data.frame")
+  annotations <- annotations %>% dplyr::select(gene_id, gene_name, seq_name, gene_biotype, description)
+  
+  print("Get gene names for Ensembl IDs for each gene")
+  cell_cycle_markers <- left_join(cell_cycle_genes, annotations, by = c("geneID" = "gene_id"))
+  
+  print("Acquire the S phase genes")
+  s_genes <- cell_cycle_markers %>% dplyr::filter(phase == "S") %>% pull("gene_name")
+  
+  print("Acquire the G2M phase genes")        
+  g2m_genes <- cell_cycle_markers %>% dplyr::filter(phase == "G2/M") %>%  pull("gene_name")
+  return(list(s_genes,g2m_genes))
+}
+#ccgenes_human=cellCycleGenes("human")
+#ccgenes_mouse=cellCycleGenes("mouse")
+```
+
+###  PCA / UMAP / tSNE / Louvain / SeuratCCA / Harmony / fastMNN / reducedMNN
+```{r}
+runSeuratPCA=function(obj, ndim=10, regress=c(), normalization.method="LogNormalize", sct_method="glmGamPoi"){
+  require(dplyr); require(Seurat); require(glmGamPoi)
+  if (normalization.method=="LogNormalize"){
+    DefaultAssay(obj)="RNA"
+    obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(., selection.method = "vst", nfeatures = 2000) %>% ScaleData(., vars.to.regress=regress)
+  }else if(normalization.method=="SCT"){
+    obj = obj %>% SCTransform(., method=sct_method, vars.to.regress=regress)
+  }else if(normalization.method=="None"){
+    obj = obj %>% ScaleData(., vars.to.regress=regress)
+  }else{
+    DefaultAssay(obj)="RNA"
+    obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(., selection.method = "vst", nfeatures = 2000) %>% ScaleData(., vars.to.regress=regress)
+  }
+  obj = obj %>% RunPCA(., npcs=ndim)
+}
+
+
+runSeurat.umap.louvain=function(obj, ndim=10, louvainResolution=1.0 , reductionName="pca", tsne=FALSE){
+    require(dplyr); require(Seurat)
+    obj = obj %>% RunUMAP(reduction = reductionName, dims = 1:ndim) %>% 
+    FindNeighbors(reduction = reductionName, dims = 1:ndim) %>% 
+    FindClusters(resolution = louvainResolution)
+    
+    if (tsne){
+      obj = obj %>% RunTSNE(reduction = reductionName, dims = 1:ndim)
+    }
+    return(obj)
+}
+
+
+wrapperRunHarmony=function(inputData,project_name="harmonyMerged", anchorFeature="orig.ident", ndim=10, louvainResolution=1.0, regress=c(), SCT_normalization=FALSE){
+  require(harmony); require(dplyr); require(Seurat)
+  if (mode(inputData)=="S4"){
+    print("[Seurat S4] detected")
+    data_vector=SplitObject(inputData, anchorFeature)
+  }else if(mode(inputData)=="list" & unique(as.character(lapply(inputData, function(x) mode(x))))=="S4"){
+    print("[list of Seurat S4] detected")
+  }else{
+    print("Please specify input data as [Seurat S4] or [list of Seurat S4s]")
+    return(NULL)
+  }
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+  merged.obj[["toAnchor"]] = merged.obj[[anchorFeature]]
+
+  if(SCT_normalization){
+    merged.obj = runSeuratPCA(merged.obj, ndim, regress, "SCT")
+    merged.obj = merged.obj %>% RunHarmony("toAnchor", plot_convergence = TRUE, assay.use="SCT")
+  }else{
+    merged.obj = runSeuratPCA(merged.obj, ndim, regress, "LogNormalize")
+    merged.obj = merged.obj %>% RunHarmony("toAnchor", plot_convergence = TRUE, assay.use="RNA")
+  }
+  
+  merged.obj %>% DimPlot(object = ., reduction = "pca", group.by = "toAnchor", pt.size = .1) %>% print(.)
+  merged.obj %>% VlnPlot(object = ., features = "PC_1", group.by = "toAnchor", pt.size = 0) %>% print(.)
+  
+  merged.obj %>% DimPlot(object = ., reduction = "harmony", group.by = "toAnchor", pt.size = .1) %>% print(.)
+  merged.obj %>% VlnPlot(object = ., features = "harmony_1", group.by = "toAnchor", pt.size = 0) %>% print(.)
+  
+  # Downstream analysis
+  merged.obj = runSeurat.umap.louvain(merged.obj, ndim, louvainResolution, reductionName="harmony")
+  
+  merged.obj %>% DimPlot(., reduction = "umap",label = TRUE, pt.size = .1) %>% print(.)
+  merged.obj %>% DimPlot(., reduction = "umap",group.by = "toAnchor",label = TRUE, pt.size = .1) %>% print(.)
+  return(merged.obj)
+}
+
+wrapperRunSeuratCCA=function(inputData,project_name="CCA_Merged", anchorFeature="orig.ident", ndim=30, louvainResolution=1.0, regress=c(), SCT_normalization=FALSE, k.weights=100, memMB=20000){
+  require(dplyr); require(Seurat); require(glmGamPoi)
+  options(future.globals.maxSize=memMB * 1024^2)
+  if (mode(inputData)=="S4"){
+    print("[Seurat S4] detected")
+    data_vector=SplitObject(inputData, anchorFeature)
+  }else if(mode(inputData)=="list" & unique(as.character(lapply(inputData, function(x) mode(x))))=="S4"){
+    print("[list of Seurat S4] detected")
+  }else{
+    print("Please specify input data as [Seurat S4] or [list of Seurat S4s]")
+    return(NULL)
+  }
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+
+  individual_list = SplitObject(merged.obj, split.by = anchorFeature)
+  minCellNum=individual_list %>% lapply(., function(x) length(Cells(x))) %>% unlist(.) %>% min(.)
+  k.weights=min(k.weights, minCellNum)
+
+  if(SCT_normalization){
+    individual_list = lapply(X = individual_list, function(x) SCTransform(x, method="glmGamPoi", vars.to.regress = regress))
+    SCT_features=SelectIntegrationFeatures(object.list = individual_list, nfeatures=3000) ### Seurat suggestion
+    individual_list=PrepSCTIntegration(object.list = individual_list, anchor.features = SCT_features)
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, normalization.method = "SCT", anchor.features = SCT_features)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim, normalization.method = "SCT", k.weight = k.weights)
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% RunPCA(., npcs=ndim)
+  }else{
+    individual_list = lapply(X = individual_list, FUN = NormalizeData)
+    individual_list = lapply(X = individual_list, FUN = FindVariableFeatures)
+    features = SelectIntegrationFeatures(object.list = individual_list)
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, anchor.features = features)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim, k.weight = k.weights)
+    DefaultAssay(obj_integrated) = "integrated"
+    obj_integrated = obj_integrated %>% runSeuratPCA(., ndim, regress, "None")
+  }
+ 
+  obj_integrated = obj_integrated %>% runSeurat.umap.louvain(., ndim=ndim, louvainResolution=louvainResolution)
+  return(obj_integrated)
+}
+
+reducedMNN_seurat=function(obj, nDim=10,  anchorFeature="batch",  clusterResolution=1.0, SEED=100, reduction="pca"){
+  require(batchelor); require(Seurat); require(dplyr)
+  set.seed(SEED)
+  seuratPCs=obj@reductions[[reduction]]@cell.embeddings[,1:nDim]
+  reducedMNN.obj = reducedMNN(seuratPCs, batch=obj@meta.data[[anchorFeature]])
+
+  batchelor_reducedMNN_correctedPCs=reducedMNN.obj$corrected
+  colnames(batchelor_reducedMNN_correctedPCs) = 1:ncol(batchelor_reducedMNN_correctedPCs) %>% paste0("reducedMNN_", .)
+  obj[["reducedmnn"]] = CreateDimReducObject(embeddings = batchelor_reducedMNN_correctedPCs, key = "reducedMNN_", assay = DefaultAssay(obj))
+  obj = obj %>% runSeurat.umap.louvain(., ndim=nDim, reductionName="reducedmnn", louvainResolution = clusterResolution)
+
+  return(obj)
+}
+
+fastMNN_seurat=function(obj, nDim=10, anchorFeature="batch", clusterResolution=1.0, SEED=100, SCT_normalization=FALSE){
+  require(batchelor); require(Seurat); require(dplyr); require(glmGamPoi)
+  set.seed(SEED)
+  if(SCT_normalization){
+    obj = obj %>% SCTransform(., method = "glmGamPoi")
+  }else{
+    DefaultAssay(obj)="RNA"
+    obj = obj %>% NormalizeData(.) %>% FindVariableFeatures(.)
+  }
+  chosen.hvgs=obj[[DefaultAssay(obj)]]@var.features
+  seuratCount=obj[[DefaultAssay(obj)]]@counts
+  seuratLogCount=obj[[DefaultAssay(obj)]]@data
+  sce= SingleCellExperiment(list(counts=seuratCount, logcounts=seuratLogCount),
+                                     colData=obj@meta.data)
+  
+  sce = fastMNN(sce, batch=sce[[anchorFeature]], subset.row=chosen.hvgs, d=nDim)
+  
+  batchelor_fastMNN_correctedPCs=sce@int_colData$reducedDims$corrected
+  colnames(batchelor_fastMNN_correctedPCs) = 1:ncol(batchelor_fastMNN_correctedPCs) %>% paste0("fastMNN_", .)
+  obj[["fastmnn"]] = CreateDimReducObject(embeddings = batchelor_fastMNN_correctedPCs, key = "fastMNN_", assay = DefaultAssay(obj))
+  obj = obj %>% runSeurat.umap.louvain(., ndim=nDim, reductionName="fastmnn", louvainResolution = clusterResolution)
+
+  return(obj)
+}
+
+```
+
+
+
+### RNA+ATAC Seurat Vignette (for Mouse-Human integration)
+```{r}
+#mousePart[["cfit_umap"]]=NULL
+#humanPart[["cfit_umap"]]=NULL
+
+nDim=30
+assayToUse="RNA"
+normMethod="LogNormalize"
+
+mousePart = mousePart %>% runSeuratPCA(., normalization.method=normMethod, ndim=nDim)
+humanPart = humanPart %>% runSeuratPCA(., normalization.method=normMethod, ndim=nDim)
+
+transfer.anchors = FindTransferAnchors(reference = mousePart, query = humanPart, features = VariableFeatures(object = mousePart), normalization.method=normMethod, reference.assay = assayToUse, query.assay = assayToUse, reduction = "cca")
+
+celltype.predictions = TransferData(anchorset = transfer.anchors, refdata = mousePart$celltype, weight.reduction = humanPart[["pca"]], dims = 1:nDim,
+)
+
+humanPart$celltypeOld = humanPart$celltype 
+humanPart$celltype = celltype.predictions$predicted.id
+
+refdata=mousePart[[assayToUse]]@data
+
+imputation = TransferData(anchorset = transfer.anchors, refdata = refdata, weight.reduction = humanPart[["pca"]], dims = 1:nDim,
+                          )
+
+humanPart[[assayToUse]] = imputation
+DefaultAssay(humanPart)=assayToUse
+coembed=merge(x=mousePart, y=humanPart)
+
+coembed = coembed %>% runSeuratPCA(., normalization.method=normMethod, ndim=nDim)
+coembed = coembed %>% runSeurat.umap.louvain(., ndim=nDim)
+
+```
+
+
+### Transfer Test
+```{r}
+data_vector=c(humanSmall, musSmall)
+project_name="CCA_Merged"
+species="human"
+anchorFeature="subjects"
+ndim=30
+louvainResolution=1.0
+cellCycleRegress=TRUE
+showCellCyclePlots=FALSE
+SCT_normalization=FALSE
+memMB=20000
+
+musHom.anchor =FindTransferAnchors(reference = musSmall, query = humanSmall, dims = 1:30, project.query=TRUE, reference.reduction = "pca")
+
+human.transfered=TransferData(anchorset = musHom.anchor, refdata = musSmall$celltype, dims = 1:30)
+humanSmall$predictions=human.transfered
+#require(dplyr); require(Seurat)
+#options(future.globals.maxSize=memMB * 1024^2)
+#cellIDs = data_vector %>% lapply(., function(x) #x@project.name) %>% as.character()
+#obj1=data_vector[[1]]
+#obj2=data_vector[2:length(data_vector)]
+#merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, #project = project_name)
+
+#individual_list = SplitObject(merged.obj, split.by = #anchorFeature)
+#if(SCT_normalization){
+#  for (i in 1:length(individual_list)){
+#    individual_list[[i]] = #SCTransform(individual_list[[i]], verbose = FALSE)
+#  }
+#  SCT_features=SelectIntegrationFeatures(object.list = #individual_list, nfeatures=3000) ### Seurat suggestion
+#  individual_list=PrepSCTIntegration(object.list = #individual_list, anchor.features = SCT_features)
+#  CCA_anchors = FindIntegrationAnchors(object.list = #individual_list, dims = 1:ndim, normalization.method = #"SCT", anchor.features = SCT_features)
+#  obj_integrated = IntegrateData(anchorset = CCA_anchors, #dims = 1:ndim, normalization.method = "SCT")
+#}else{
+#  for (i in 1:length(individual_list)){
+#    individual_list[[i]] = #NormalizeData(individual_list[[i]], verbose = FALSE)
+#    individual_list[[i]]=individual_list[[i]] %>%  #FindVariableFeatures(selection.method = "vst", nfeatures = #2000)
+#  }
+
+#  CCA_anchors = FindIntegrationAnchors(object.list = #individual_list, dims = 1:ndim)
+  #obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim)
+}
+#DefaultAssay(obj_integrated) = "integrated"
+#obj_integrated = runSeuratPCA(obj_integrated, ndim, species, cellCycleRegress, showCellCyclePlots, logNorm.vst=FALSE)
+#obj_integrated = runSeurat.umap.tsne.louvain(obj_integrated, ndim, louvainResolution)
+```
+
+### Dimension reduction + cross-species anchoring (PCA, UMAP, CCA-Harmony)
+```{r}
+require(Seurat); require(harmony)
+
+mouseSharedNorm = mouseShared %>% Seurat::NormalizeData(verbose=FALSE)
+humanSharedNorm = humanShared %>% Seurat::NormalizeData(verbose=FALSE)
+musHomNorm=merge(humanSharedNorm, y=mouseSharedNorm, add.cell.ids = c("human", "mouse"), merge.data = TRUE) 
+
+musHomNorm = musHomNorm %>%
+  #Seurat::NormalizeData(verbose=FALSE) %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(pc.genes = musHomNorm@var.genes, npcs = 20, verbose = FALSE)
+
+
+musHom.harmony= musHomNorm %>% RunHarmony("species", plot_convergence = TRUE)
+
+harmony_embeddings <- Embeddings(musHom.harmony, 'harmony')
+
+#p1 <- DimPlot(object = musHom.harmony, reduction = "harmony", pt.size = .1, group.by = "sample")
+#p2 <- VlnPlot(object = musHom.harmony, features = "harmony_1", group.by = "orig.ident", pt.size = .1)
+#plot_grid(p1,p2)
+
+
+musHom.harmony <- musHom.harmony %>% 
+  RunUMAP(reduction = "harmony", dims = 1:20) %>% 
+  FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+  FindClusters(resolution = 0.5) %>% 
+  identity()
+```
+### Visualization
+```{r}
+musHom.harmony@meta.data$celltypeMerged = musHom.harmony$celltype %>% strsplit(., split="-R") %>% lapply(., "[", 1) %>% as.character() %>% replace(., .=="SVZ", "HumanSVZCells") %>% replace(., .=="TU", "HumanTumorCells")
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "humanTumorCells"="#5c0373", "humanSVZCells"="#cc19fa")
+
+DimPlot(musHom.harmony, cols=my_cols, group.by="celltypeMerged")
+```
+
+### Seuratv4 log-normalized integration
+```{r}
+
+wrapperRunSeuratCCA=function(data_vector,project_name="CCA_Merged", species="human", ndim=30, louvainResolution=1.0, cellCycleRegress=TRUE, showCellCyclePlots=FALSE, SCT_normalization=FALSE, memMB=20000){
+  require(dplyr); require(Seurat)
+  options(future.globals.maxSize=memMB * 1024^2)
+  cellIDs = data_vector %>% lapply(., function(x) x@project.name) %>% as.character()
+  obj1=data_vector[[1]]
+  obj2=data_vector[2:length(data_vector)]
+  merged.obj = merge(obj1, y = obj2, add.cell.ids = cellIDs, project = project_name)
+
+  individual_list = SplitObject(merged.obj, split.by = "orig.ident")
+  if(SCT_normalization){
+    for (i in 1:length(individual_list)){
+      individual_list[[i]] = SCTransform(individual_list[[i]], verbose = FALSE)
+    }
+    SCT_features=SelectIntegrationFeatures(object.list = individual_list, nfeatures=3000) ### Seurat suggestion
+    individual_list=PrepSCTIntegration(object.list = individual_list, anchor.features = SCT_features)
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim, normalization.method = "SCT", anchor.features = SCT_features)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim, normalization.method = "SCT")
+    DefaultAssay(obj_integrated) = "integrated"
+  }else{
+    for (i in 1:length(individual_list)){
+      individual_list[[i]] = NormalizeData(individual_list[[i]], verbose = FALSE)
+      individual_list[[i]]=individual_list[[i]] %>%  FindVariableFeatures(selection.method = "vst", nfeatures = 2000)
+    }
+    
+    CCA_anchors = FindIntegrationAnchors(object.list = individual_list, dims = 1:ndim)
+    obj_integrated = IntegrateData(anchorset = CCA_anchors, dims = 1:ndim)
+    DefaultAssay(obj_integrated) = "integrated"
+  }
+  obj_integrated = runSeuratPCA(obj_integrated, ndim, species, cellCycleRegress, showCellCyclePlots, logNorm.vst=FALSE)
+  obj_integrated = runSeuratUMAP(obj_integrated, ndim, louvainResolution)
+  return(obj_integrated)
+  
+}
+musHom_logNorm.CCA=wrapperRunSeuratCCA(data_vector=c(mouseShared, humanShared), project_name="logNorm_CCA_musHom")
+musHom_SCT.CCA=wrapperRunSeuratCCA(data_vector=c(mouseShared, humanShared), project_name="SCT_CCA_musHom", SCT_normalization = TRUE)
+
+musHom_logNorm.CCA@meta.data$celltypeMerged = 
+#p1 <- DimPlot(musHom_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+#p1
+```
+
+### Seuratv4 reciprocal PCA
+```{r}
+require(ggplot2)
+require(cowplot)
+
+musHom_rPCA_list = SplitObject(musHom, split.by = "species")
+for (i in 1:length(musHom_rPCA_list)){
+  musHom_rPCA_list[[i]]=NormalizeData(musHom_rPCA_list[[i]], verbose = FALSE)
+  musHom_rPCA_list[[i]]=musHom_rPCA_list[[i]] %>%  FindVariableFeatures(selection.method = "vst", nfeatures = 2000)
+}
+musHom_rPCA_features <- SelectIntegrationFeatures(object.list = musHom_rPCA_list, nfeatures = 3000)
+musHom_rPCA_list=lapply(musHom_rPCA_list, FUN=function(x){
+  x=ScaleData(x, features=musHom_rPCA_features, verbose=FALSE)
+  x=RunPCA(x, features=musHom_rPCA_features, verbose=FALSE)
+})
+
+musHom_rPCA_anchors <- FindIntegrationAnchors(object.list = musHom_rPCA_list, anchor.features = musHom_rPCA_features, reduction="rpca")
+
+
+musHom_rPCA_integrated <- IntegrateData(anchorset = musHom_rPCA_anchors)
+DefaultAssay(musHom_rPCA_integrated) <- "integrated"
+
+musHom_rPCA_integrated <- ScaleData(musHom_rPCA_integrated, verbose = FALSE)
+musHom_rPCA_integrated <- RunPCA(musHom_rPCA_integrated, npcs = 30, verbose = FALSE)
+musHom_rPCA_integrated <- RunUMAP(musHom_rPCA_integrated, reduction = "pca", dims = 1:30)
+
+
+
+musHom_rPCA_integrated@meta.data$celltypeMerged = musHom_rPCA_integrated$celltype %>% strsplit(., split="-R") %>% lapply(., "[", 1) %>% as.character() %>% replace(., .=="SVZ", "HumanSVZCells") %>% replace(., .=="TU", "HumanTumorCells")
+
+p1 <- DimPlot(musHom_rPCA_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+p1
+```
+
+### Seurat4 query human on mouse PC
+```{r}
+
+mouseShared <- FindVariableFeatures(mouseShared, selection.method = "vst", nfeatures = 2000)
+mouseShared <- ScaleData(mouseShared, verbose = FALSE)
+mouseShared <- RunPCA(mouseShared, npcs = 30, verbose = FALSE)
+mouseShared <- RunUMAP(mouseShared, reduction = "pca", dims = 1:30, return.model=TRUE)
+
+human.anchors = FindTransferAnchors(reference=mouseShared, query=humanShared, dim = 1:30)
+#human.predictions=TransferData(anchorset = human.anchors, refdata = mouseShared$celltype, dims = 1:30)
+
+humanQueried <- AddMetaData(humanShared, metadata = human.predictions)
+humanQueried <- MapQuery(anchorset = human.anchors, reference = mouseShared, query = humanQueried, 
+    refdata = list(celltype = "celltype"), reference.reduction = "pca", reduction.model = "umap")
+humanQueried@meta.data$celltypeMerged = humanQueried$celltype %>% strsplit(., split="-R") %>% lapply(., "[", 1) %>% as.character() %>% replace(., .=="SVZ", "HumanSVZCells") %>% replace(., .=="TU", "HumanTumorCells")
+```
+
+### Seurat4 query - visualization
+```{r}
+p1 <- DimPlot(mouseShared, cols=my_cols, reduction = "umap", group.by = "celltype", label = TRUE, label.size = 3, 
+    repel = TRUE) + NoLegend() + ggtitle("Reference annotations")
+p2 <- DimPlot(humanQueried, cols=my_cols, reduction = "ref.umap", group.by = "predicted.id", label = TRUE, 
+    label.size = 3, repel = TRUE) + NoLegend() + ggtitle("Query transferred labels")
+p3 <- DimPlot(humanQueried, cols=my_cols, reduction = "ref.umap", group.by = "celltypeMerged", label = TRUE, 
+    label.size = 3, repel = TRUE) + NoLegend() + ggtitle("Query original labels")
+pg = plot_grid(p1, p2, p3)
+
+```
+
+
+### Seuratv4 SCT integration
+```{r}
+require(ggplot2)
+require(cowplot)
+
+options(future.globals.maxSize = 20000 * 1024^2)
+musHom_SCT_list = SplitObject(musHom, split.by = "species")
+for (i in 1:length(musHom_SCT_list)){
+  musHom_SCT_list[[i]] = SCTransform(musHom_SCT_list[[i]], verbose=FALSE)
+}
+
+musHom_SCT_features <- SelectIntegrationFeatures(object.list = musHom_SCT_list, nfeatures = 3000)
+musHom_SCT_list<-PrepSCTIntegration(object.list = musHom_SCT_list, anchor.features = musHom_SCT_features, 
+    verbose = FALSE)
+
+musHom_SCT_anchors=FindIntegrationAnchors(object.list = musHom_SCT_list, normalization.method = "SCT", 
+    anchor.features = musHom_SCT_features, verbose = FALSE)
+musHom_SCT_integrated = IntegrateData(anchorset = musHom_SCT_anchors, normalization.method = "SCT", verbose = FALSE)
+musHom_SCT_integrated <- RunPCA(musHom_SCT_integrated,verbose = FALSE)
+musHom_SCT_integrated <- RunUMAP(musHom_SCT_integrated, reduction = "pca", dims = 1:30)
+
+musHom_SCT_integrated@meta.data$celltypeMerged = musHom_SCT_integrated$celltype %>% strsplit(., split="-R") %>% lapply(., "[", 1) %>% as.character() %>% replace(., .=="SVZ", "HumanSVZCells") %>% replace(., .=="TU", "HumanTumorCells")
+
+p1 <- DimPlot(musHom_SCT_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+p1
+```
+
+### Seuratv4 refbased SCT integration
+```{r}
+require(ggplot2)
+require(cowplot)
+options(future.globals.maxSize = 20000 * 1024^2)
+
+musHom_SCT_list = SplitObject(musHom, split.by = "species")
+for (i in 1:length(musHom_SCT_list)){
+  musHom_SCT_list[[i]] = SCTransform(musHom_SCT_list[[i]], verbose=FALSE)
+}
+
+musHom_SCT_features <- SelectIntegrationFeatures(object.list = musHom_SCT_list, nfeatures = 3000)
+musHom_SCT_list<-PrepSCTIntegration(object.list = musHom_SCT_list, anchor.features = musHom_SCT_features,verbose = FALSE)
+
+musHom_reference=which(names(musHom_SCT_list) == "mouse")
+
+musHom_refSCT_anchors=FindIntegrationAnchors(object.list = musHom_SCT_list, normalization.method = "SCT", 
+    anchor.features = musHom_SCT_features, reference = musHom_reference, verbose = FALSE)
+
+musHom_refSCT_integrated = IntegrateData(anchorset = musHom_refSCT_anchors, normalization.method = "SCT", verbose = FALSE)
+musHom_refSCT_integrated <- RunPCA(musHom_refSCT_integrated,verbose = FALSE)
+musHom_refSCT_integrated <- RunUMAP(musHom_refSCT_integrated, reduction = "pca", dims = 1:30)
+
+musHom_refSCT_integrated@meta.data$celltypeMerged = musHom_refSCT_integrated$celltype %>% strsplit(., split="-R") %>% lapply(., "[", 1) %>% as.character() %>% replace(., .=="SVZ", "HumanSVZCells") %>% replace(., .=="TU", "HumanTumorCells")
+
+p1 <- DimPlot(musHom_refSCT_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+p1
+```
+
+### Louvain Clustering + NN
+```{r}
+NNClust=function(subcluster){
+  subcluster <- FindNeighbors(subcluster, dims = 1:30, resolution = 0.5)
+  subcluster <- FindClusters(subcluster)
+  return(subcluster)
+}
+
+musHom_integrated=musHom_integrated %>% NNClust(.)
+musHom_SCT_integrated=musHom_SCT_integrated %>% NNClust(.)
+
+```
+
+
+### Visualization
+```{r}
+#save(musHom.harmony, file = "/home/dcha/glioblastoma/rdata/musHom_harmony.RData")
+#save(musHom_integrated, file = "/home/dcha/glioblastoma/rdata/musHom_SeuratCCA.RData")
+
+
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "HumanTumorCells"="#7419a6", "HumanSVZCells"="#c863ff")
+p1 <- DimPlot(musHom_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+p2 <- DimPlot(gbmRoadmapBig, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+
+p1 <- DimPlot(musHom_integrated, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+p2 <- DimPlot(gbmRoadmapBig, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+```
+
+
+#### Batch anchoring DONE
+
+#### <- Here goes the Couturier Nat Commun 2020 PC->DC roadmap mapping (Diffusion embedding)
+
+### Matching Human annotations and mouse-Human data
+### Please load anchored RData first
+```{r}
+require(dplyr)
+#load("/home/dcha/glioblastoma/rdata/musHom_logNorm_SeuratCCA.RData")
+#load("/home/dcha/glioblastoma/rdata/musHom_SCT_SeuratCCA.RData")
+
+
+musHom_logNorm.CCA_2 = musHom_logNorm.CCA
+correctedAnnotMerge=read.table("corrected.annotMerge.txt", header=T, sep="\t")
+
+mouseCellNum=musHom_logNorm.CCA_2@meta.data %>% dplyr::filter(species=="mouse") %>% nrow(.)
+humanCellNum=musHom_logNorm.CCA_2@meta.data %>% dplyr::filter(species=="human") %>% nrow(.)
+
+musHom_logNorm.CCA_2@meta.data[(mouseCellNum+1):(mouseCellNum+humanCellNum),]$celltypeMerged =correctedAnnotMerge$gbm_merge_cells
+
+
+musHomHarmony_humanAnnot = musHomHarmony
+correctedAnnotMerge=read.table("corrected.annotMerge.txt", header=T, sep="\t")
+
+mouseCellNum=musHomHarmony_humanAnnot@meta.data %>% dplyr::filter(species=="mouse") %>% nrow(.)
+humanCellNum=musHomHarmony_humanAnnot@meta.data %>% dplyr::filter(species=="human") %>% nrow(.)
+
+musHom_logNorm.CCA_2@meta.data[(mouseCellNum+1):(mouseCellNum+humanCellNum),]$celltypeMerged =correctedAnnotMerge$gbm_merge_cells
+
+#temp_humanAnnot = musHom_logNorm.CCA@meta.data %>% dplyr::filter(species=="human") %>% rownames(.) %>% strsplit("humanShared_") %>% lapply(., function(x) x[[2]]) %>% as.character()
+```
+
+
+
+### Diffusion Embedding Prep
+```{r}
+require(plotly)
+set.seed(0)
+
+humanCells=c("HumanTumorCells", "HumanSVZCells") <- 
+mouseNormalCells=c("NSC", "OPC", "COP", "NB","TAC", "Neuron", "OL")
+mouseCancerCells=c("pre-CC1", "pre-CC2", "CC1", "CC2", "CC3", "CC4")
+
+Idents(file_to_map) <- "celltypeMerged"
+gbmRoadmapBig <- subset(file_to_map, ident= c(humanCells, mouseNormalCells, mouseCancerCells))
+gbmRoadmap <- subset(gbmRoadmapBig, downsample=2000)
+
+roadmapPCs = gbmRoadmap@reductions$pca@cell.embeddings[,1:10] %>% as.data.frame()
+roadmapMeta = gbmRoadmap@meta.data %>% dplyr::select(celltypeMerged) %>% rownames_to_column(var="Cell")
+
+roadmapDf = bind_cols(roadmapMeta, roadmapPCs)
+roadmapDf$celltypeMerged = roadmapDf$celltypeMerged %>% factor(.)
+```
+### Visualization
+```{r}
+require(cowplot)
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "HumanTumorCells"="#7419a6", "HumanSVZCells"="#c863ff")
+
+p1 <- DimPlot(musHom_logNorm_SeuratCCA, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+p2 <- DimPlot(gbmRoadmapBig, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+p3 <- DimPlot(gbmRoadmap, cols=my_cols, reduction = "umap", group.by = "celltypeMerged")
+#p2 <- DimPlot(musHom_integrated, reduction = "umap", group.by = "celltype", label = TRUE, 
+#    repel = TRUE) + NoLegend()
+#plot_grid(p1, p2)
+#p3 <- FeaturePlot(gbmRoadmapBig, features=c("GAP43"), label=T)
+```
+
+### Diffusion Map
+```{r}
+require(destiny)
+ 
+destinyExpression=function(scDf){
+  scCounts=scDf %>% .[,c(1,3:ncol(.))]
+  tGbmPcExpr = as.ExpressionSet(scCounts)
+  tGbmPcExpr@phenoData$celltypeMerged = scDf$celltypeMerged
+  return(tGbmPcExpr)
+}
+
+tGbmPcExpr=destinyExpression(roadmapDf)
+
+
+#num.cells <- gsub('^(\\d+)C.*$', '\\1', ct$Cell)
+#ct@phenoData$num.cells <- as.integer(num.cells)
+
+#have.duplications <- ct@phenoData$num.cells>1
+#normal.vals <- apply(exprs(ct), 2, function(sample) all(sample <= 28))
+
+#cleaned.ct <- ct[, have.duplications & normal.vals]
+tGbmDiffusion <- DiffusionMap(tGbmPcExpr, k=50, n_eigs=10)
+
+#PC_DC_transition = (MASS::ginv(as.matrix(roadmapPCs))) %*% tGbmDiffusion@eigenvectors
+#rownames(PC_DC_transition)=paste0("PC_",1:10)
+
+#tGbmDiffusionPred1=as.matrix(roadmapPCs) %*% PC_DC_transition
+
+diffusionMeta = tGbmDiffusion@data_env$data %>% as.data.frame() %>% dplyr::select(c(Cell, celltypeMerged))
+diffusionEmbs = tGbmDiffusion@eigenvectors %>% as.data.frame()
+diffusionDF = bind_cols(diffusionMeta, diffusionEmbs)
+```
+
+
+### Three PC plot
+```{r}
+require(plotly)
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "HumanTumorCells"="#5c0373", "HumanSVZCells"="#cc19fa")
+
+toPlotColors = my_cols[levels(roadmapDf$celltypeMerged)]
+threedPCPlot=roadmapDf %>% plot_ly(., x=~PC_1, y=~PC_2, z=~PC_3, color=~celltypeMerged, colors=toPlotColors, marker=list(size=2)) %>%
+#add_markers() %>%
+layout(
+  scene=list(xaxis=list(title="PC1"),
+             yaxis=list(title="PC2"),
+             zaxis=list(title="PC3")),
+  legend = list(itemsizing='constant')
+)
+print(threedPCPlot)
+```
+
+
+### DiffusionMap plot
+```{r}
+require(plotly)
+require(gridExtra)
+my_cols <- c("pre-CC1"= '#F8766D', "pre-CC2"= '#ad180e', "CC1"='#cf9c63', "CC2"= '#de7b37', "CC3"='#d1c630', 
+             "CC4"='#8FAA00', "NSC"=  '#edeb53', "TAC"= '#66d99c', "NB"=  '#00bc59', "Neuron"= '#038741', "OPC"= '#00BADE',  
+            "COP"=  '#2194db', "OL"='#2f3bbd',  "EPC"= '#737372', "EC"='#B385FF', "PC"= '#D874FD', "VSMC"='#EF67EB', 
+             "MAC"='#f5bfd0', "MG"='#d1889f', "TAM1"= '#ad4565', "TAM2"= '#992c4e', "Meninges"='#360816',
+            "HumanTumorCells"="#5c0373", "HumanSVZCells"="#cc19fa")
+
+toPlotColors = my_cols[levels(diffusionDF$celltypeMerged)]
+
+threedPlot = diffusionDF %>% plot_ly(., x=~DC2, y=~DC3, z=~DC4, color=~celltypeMerged, colors=toPlotColors, marker=list(size=2)) %>%
+add_markers() %>%
+layout(
+  showlegend = TRUE,
+  scene=list(xaxis=list(title="DC2"),
+             yaxis=list(title="DC3"),
+             zaxis=list(title="DC4")),
+  legend = list(itemsizing='constant')
+)
+print(threedPlot)
+
+tilePlot = function(num, legendBool=FALSE){
+  orderedDf = diffusionDF %>% filter(!(celltypeMerged %in% humanCells)) %>% arrange(!!sym(paste0("DC",num))) %>% mutate(tempOrder=1:nrow(.)) 
+  barcodePlot=ggplot(orderedDf, aes(x=tempOrder, y=1, colour=celltypeMerged, fill=celltypeMerged))+geom_tile()+
+    scale_colour_manual(values=toPlotColors)+scale_fill_manual(values=toPlotColors)+theme_classic()+
+  theme(axis.title.y=element_blank(),axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        legend.position=ifelse(legendBool,"right","none"))+ggtitle(paste0("DC",num))
+  return(barcodePlot)
+}
+
+barcodeList = list()
+for (num in 1:10){
+  barcodeList[[num]] = tilePlot(num)
+}
+
+tilePlot(1, legendBool=TRUE)
+do.call(grid.arrange, c(barcodeList, list(ncol=2)))
+```
